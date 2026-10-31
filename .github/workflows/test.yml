@@ -1,0 +1,48 @@
+name: safety tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse PowerShell scripts
+        shell: powershell
+        run: |
+          $failed = $false
+          Get-ChildItem .\scripts -Recurse -Filter *.ps1 | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName,
+              [ref]$tokens,
+              [ref]$errors
+            )
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object {
+                Write-Error ("{0}:{1}: {2}" -f $_.Extent.File, $_.Extent.StartLineNumber, $_.Message)
+              }
+              $failed = $true
+            }
+          }
+          if ($failed) { exit 1 }
+
+      - name: Run non-destructive safety tests
+        shell: powershell
+        run: .\scripts\tests\test-lib.ps1
+
+      - name: Validate skill metadata
+        shell: powershell
+        run: |
+          $content = Get-Content -Raw -Encoding UTF8 .\SKILL.md
+          if ($content -notmatch '(?s)^---\s*\nname:\s*c-drive-cleanup\s*\n') {
+            throw 'Invalid SKILL.md frontmatter'
+          }

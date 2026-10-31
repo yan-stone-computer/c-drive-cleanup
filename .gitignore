@@ -1,0 +1,13 @@
+# Local reports and test artifacts
+reports/
+*.json
+*.log
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local scratch work
+work/
