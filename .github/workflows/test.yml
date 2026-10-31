@@ -43,10 +43,20 @@ jobs:
         shell: powershell
         run: |
           $reportDir = Join-Path $env:RUNNER_TEMP 'c-drive-cleanup-reports'
-          $json = & powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\clean.ps1 `
-            -Level safe -AllSafe -DryRun -Json -LogDir $reportDir | Out-String
-          if ($LASTEXITCODE -notin @(0, 2)) { throw "clean.ps1 exited with $LASTEXITCODE" }
-          $result = $json | ConvertFrom-Json
+          $stdout = Join-Path $env:RUNNER_TEMP 'c-drive-cleanup-clean.json'
+          $stderr = Join-Path $env:RUNNER_TEMP 'c-drive-cleanup-clean.err'
+          $process = Start-Process powershell -NoNewWindow -Wait -PassThru `
+            -RedirectStandardOutput $stdout -RedirectStandardError $stderr `
+            -ArgumentList @(
+              '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', '.\scripts\clean.ps1',
+              '-Level', 'safe', '-AllSafe', '-DryRun', '-Json', '-LogDir', $reportDir
+            )
+          Write-Host "clean.ps1 exit code: $($process.ExitCode)"
+          if ($process.ExitCode -notin @(0, 2)) {
+            Get-Content -Raw -Encoding UTF8 $stderr
+            throw "clean.ps1 exited with $($process.ExitCode)"
+          }
+          $result = Get-Content -Raw -Encoding UTF8 -LiteralPath $stdout | ConvertFrom-Json
           if ($result.SafetyProfile -ne 'safe-v2+allsafe') { throw 'AllSafe profile was not selected' }
 
       - name: Verify manual checklist generation
