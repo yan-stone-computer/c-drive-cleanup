@@ -1,56 +1,223 @@
-# C 盘清理与迁移手册（Windows 11）
+# C 盘自动清理与手动操作手册
 
-原则：能重建的缓存可以清；证据、回退数据、用户文件只迁移或由官方界面处理。
+原则：代理清理可重建缓存；管理员项给出提权命令；不可逆、破坏证据、改系统设置或需要关闭应用的项，必须人工确认。
 
-## 第一阶段：先止血
+## 代理可直接清理
 
-### 1. 只读体检
+普通权限：
 
-运行 `scripts\scan.ps1`，先看剩余空间、默认安全项、管理员项和用户资料体积。不要按目录名字猜着删。
+- `%LOCALAPPDATA%\Temp`，默认保留最近 24 小时文件。
+- `%LOCALAPPDATA%\Microsoft\Windows\Explorer\thumbcache_*.db`
+- `%LOCALAPPDATA%\Microsoft\Windows\Explorer\iconcache_*.db`
+- Edge/Chrome 的 `Cache`、`Code Cache`、`GPUCache`、`Service Worker\CacheStorage`
 
-### 2. 清理临时缓存
+管理员权限：
 
-脚本默认处理：
-
-- `LocalAppData\Temp`
 - `C:\Windows\Temp`
-- 传递优化缓存
-- Explorer 缩略图/图标缓存
+- `C:\Windows\ServiceProfiles\NetworkService\AppData\Local\Microsoft\Windows\DeliveryOptimization\Cache`
+- `C:\Windows\SoftwareDistribution\Download`，仅空闲时，且不停止 BITS/WU 服务
 
-默认保留最近 24 小时文件。不要为了多清几十 MB 使用 `-SkipRecentHours 0`。
+推荐代理命令：
 
-### 3. Windows 更新与组件存储
+```powershell
+$Skill = Join-Path $env:USERPROFILE '.codex\skills\c-drive-cleanup'
+powershell -NoProfile -ExecutionPolicy Bypass -File "$Skill\scripts\scan.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "$Skill\scripts\clean.ps1" -Level safe -AllSafe
+powershell -NoProfile -ExecutionPolicy Bypass -File "$Skill\scripts\clean.ps1" -Level safe -AllSafe -Apply -Yes
+```
 
-- 设置 → 系统 → 存储 → 临时文件：适合交互式清理更新下载和旧安装。
-- 管理员终端可运行 `Dism.exe /Online /Cleanup-Image /AnalyzeComponentStore` 先分析。
-- 确认后再运行 `Dism.exe /Online /Cleanup-Image /StartComponentCleanup`。
-- 不要手动删 `WinSxS`，不要在 DISM 运行时关闭窗口或强杀进程。
+`-AllSafe` 不包含回收站、诊断证据、休眠、系统还原点、Windows.old 或 DISM。
 
-### 4. 浏览器缓存
+## 文件被占用：为什么不能强删
 
-显式使用 `-IncludeBrowserCache`，或在各浏览器中清理“缓存文件”。不要勾选密码、Cookie、历史记录，除非用户明确需要退出所有站点。
+### 用户临时目录
 
-## 第二阶段：按体积治理
+路径：`%LOCALAPPDATA%\Temp`
 
-### 5. 卸载不用的应用
+原因：应用、安装器、Codex 或沙箱进程可能仍在使用临时文件。强制终止未知进程可能丢失未保存工作。
 
-设置 → 应用 → 已安装的应用 → 按大小排序。卸载前确认存档、插件和许可证。
+手动处理：
 
-### 6. 微信 / QQ / 企业微信 / 钉钉
+1. 退出正在安装的软件、编辑器和大型应用。
+2. 重跑 `clean.ps1 -Level safe -AllSafe -Apply -Yes`。
+3. 仍被占用时注销或重启后再清理。
+4. 可在资源监视器 → CPU → 关联的句柄中搜索完整路径，确认持有者后再关闭对应应用。
 
-在应用设置中把文件存储位置迁到其他分区。聊天记录属于用户数据，不用第三方清理器直接删目录。
+### 缩略图 / 图标缓存
 
-### 7. 用户文件夹迁移
+路径：`%LOCALAPPDATA%\Microsoft\Windows\Explorer`
 
-右键“桌面/文档/下载/图片/视频” → 属性 → 位置 → 移动 → 选其他分区 → 确认移动。迁移前备份，迁移后验证资源管理器路径。
+原因：Explorer 持有 `thumbcache_*.db` / `iconcache_*.db`，运行中通常拒绝删除。
 
-### 8. 游戏与创作软件
+手动处理：关闭资源管理器窗口后重试；仍锁定可注销或重启。若明确接受桌面和任务栏短暂重启，可执行：
 
-把 Steam/Epic/Adobe/剪辑软件的媒体缓存和素材库迁到其他分区。卸载游戏不等于删除云存档，但仍应先确认。
+```powershell
+Stop-Process -Name explorer -Force
+Start-Process explorer
+```
 
-### 9. 开发者缓存（可选）
+这不会删除用户文件，但会关闭当前 Explorer 窗口。
 
-这些缓存可重建，但下次安装会重新下载：
+### 浏览器缓存
+
+路径：
+
+- `%LOCALAPPDATA%\Microsoft\Edge\User Data\Default\Cache`
+- `%LOCALAPPDATA%\Microsoft\Edge\User Data\Profile *\Cache`
+- `%LOCALAPPDATA%\Google\Chrome\User Data\Default\Cache`
+- `%LOCALAPPDATA%\Google\Chrome\User Data\Profile *\Cache`
+
+原因：浏览器运行时锁定缓存文件；清理后首次访问站点会重新下载资源。
+
+手动处理：先运行 `-AllSafe`；仍有锁定项时关闭全部浏览器窗口/后台进程后重试。不要勾选密码、Cookie 或历史记录，除非明确需要。
+
+## 需要管理员权限
+
+### Windows Temp
+
+路径：`C:\Windows\Temp`
+
+原因：普通用户没有删除全部系统临时文件的权限。
+
+操作：在“以管理员身份运行”的 PowerShell 中执行：
+
+```powershell
+$Skill = Join-Path $env:USERPROFILE '.codex\skills\c-drive-cleanup'
+powershell -NoProfile -ExecutionPolicy Bypass -File "$Skill\scripts\clean.ps1" -Level safe -AllSafe -Apply -Yes
+```
+
+### 传递优化缓存
+
+路径：`C:\Windows\ServiceProfiles\NetworkService\AppData\Local\Microsoft\Windows\DeliveryOptimization\Cache`
+
+原因：该缓存由系统服务持有，需要管理员权限。
+
+操作：使用上面的管理员 `-AllSafe` 命令。
+
+### Windows Update 下载缓存
+
+路径：`C:\Windows\SoftwareDistribution\Download`
+
+原因：需要管理员权限；更新安装中或 BITS 传输活跃时清理可能中断更新。
+
+操作：确认没有待重启更新后使用管理员 `-AllSafe`。脚本不停止 BITS/WU 服务，发现活动任务会跳过。
+
+### DISM / WinSxS
+
+路径：`C:\Windows\WinSxS`
+
+原因：禁止手动删除组件；DISM 耗时较长，并会让部分旧更新无法卸载。
+
+操作：
+
+```powershell
+Dism.exe /Online /Cleanup-Image /AnalyzeComponentStore
+Dism.exe /Online /Cleanup-Image /StartComponentCleanup
+```
+
+不要在中途关闭终端或强杀 DISM。
+
+## 不可逆或会破坏证据
+
+### 回收站
+
+路径：C 盘回收站
+
+原因：清空后无法恢复，可能包含误删文件。
+
+操作：先打开回收站逐项确认。只有明确接受不可恢复后才使用 `-IncludeRecycleBin`。
+
+### 错误报告、CBS 日志、崩溃转储
+
+路径：
+
+- `C:\ProgramData\Microsoft\Windows\WER`
+- `C:\Windows\Logs\CBS`
+- `C:\Windows\MEMORY.DMP`
+- `C:\Windows\Minidump`
+- `%LOCALAPPDATA%\CrashDumps`
+
+原因：这些是排障证据，删除后无法还原。蓝屏/组件安装故障排障前必须保留。
+
+操作：确认不再分析故障后，管理员运行 `-IncludeDiagnostics`。
+
+### 系统还原点
+
+路径：`System Volume Information`，由系统保护管理。
+
+原因：VSS 卷影不等于系统还原点。`vssadmin delete shadows /oldest` 可能删除备份或文件历史卷影。
+
+操作：系统属性 → 系统保护 → 选择 C: → 配置。不要使用第三方卷影删除命令。
+
+### Windows.old
+
+路径：`C:\Windows.old`
+
+原因：删除后不能回退旧版本 Windows；直接改 ACL、递归删除可能与系统清理并发。
+
+操作：设置 → 系统 → 存储 → 临时文件 → “以前的 Windows 安装”；或磁盘清理 → 清理系统文件。
+
+### Windows 升级残留
+
+路径：`C:\$Windows.~BT`、`C:\$Windows.~WS`
+
+原因：升级、回滚或待重启流程可能仍在使用。
+
+操作：确认升级完成或已取消后，用 Windows 设置/磁盘清理删除。
+
+## 会改变系统设置
+
+### 休眠文件
+
+路径：`C:\hiberfil.sys`
+
+原因：关闭休眠会同时关闭快速启动，属于用户设置变更。
+
+操作：管理员终端运行 `powercfg -h off`。恢复：`powercfg -h on`。
+
+### 虚拟内存
+
+路径：`C:\pagefile.sys`
+
+原因：分页文件被系统锁定，迁移需要修改虚拟内存设置并重启。
+
+操作：高级系统设置 → 性能 → 高级 → 虚拟内存；选择其他分区“系统托管”，重启生效。不要完全禁用分页文件。
+
+## 应迁移而不是删除
+
+### 用户文件夹
+
+路径：
+
+- `%USERPROFILE%\Desktop`
+- `%USERPROFILE%\Documents`
+- `%USERPROFILE%\Downloads`
+- `%USERPROFILE%\Pictures`
+- `%USERPROFILE%\Videos`
+- `%USERPROFILE%\Music`
+
+原因：这些是用户原始数据，不是缓存。
+
+操作：右键文件夹 → 属性 → 位置 → 移动；迁移前备份，迁移后验证路径。
+
+### 应用数据
+
+常见路径：
+
+- `%USERPROFILE%\Documents\WeChat Files`
+- `%USERPROFILE%\Documents\xwechat_files`
+- `%USERPROFILE%\Documents\Tencent Files`
+- `%USERPROFILE%\Documents\WXWork`
+- `%USERPROFILE%\Documents\DingTalk`
+- `%LOCALAPPDATA%\Netease\CloudMusic`
+
+原因：可能包含聊天记录、接收文件、账号状态和离线内容。
+
+操作：在应用设置中迁移存储位置，不要直接删目录。
+
+### 开发者缓存
+
+命令：
 
 ```powershell
 npm cache clean --force
@@ -59,52 +226,20 @@ pip cache purge
 dotnet nuget locals all --clear
 ```
 
-企业代理、离线环境或计量网络下不要使用。
+原因：可重建，但会重新下载，离线/计量网络环境不适合。只在确认工具链和网络条件后手动执行。
 
-### 10. 图形与 DirectX 着色器缓存（可选）
+### Shader / DirectX 缓存
 
-游戏出现着色器损坏时，可通过显卡驱动或游戏设置重置着色器缓存。清理后前几分钟可能卡顿，不建议把 `%LOCALAPPDATA%\D3DSCache` 作为常规磁盘清理项。
+常见路径：`%LOCALAPPDATA%\D3DSCache`、`%LOCALAPPDATA%\NVIDIA\DXCache`、`%LOCALAPPDATA%\AMD\DxCache`
 
-## 第三阶段：让 C 盘不再爆
-
-### 11. 虚拟内存迁移
-
-设置 → 系统 → 系统信息 → 高级系统设置 → 性能“设置” → 高级 → 虚拟内存“更改”。取消自动管理，C 盘设为“无分页文件”，目标盘设为“系统托管”，重启。
-
-内存 ≤ 16 GB 时通常保留 4–8 GB 分页文件，不要完全禁用。
-
-### 12. 新软件默认装到其他分区
-
-安装向导选择 `D:\Apps\...`。不要把整个 `Program Files` 搬走，也不要删除 `ProgramData\Package Cache`、`Windows\Installer` 或 `WinSxS`。
-
-### 13. 打开存储感知
-
-设置 → 系统 → 存储 → 存储感知。建议定期清理临时文件；回收站和下载目录删除策略要谨慎，下载目录可能包含唯一副本。
-
-### 14. 每月复查
-
-优先看增长最快的应用数据目录，再做迁移。空间管理比“一次深度清理”更可靠。
-
-## 仅手动、不可逆的系统项
-
-### 系统还原点
-
-系统属性 → 系统保护 → 选择 C: → 配置 → 删除。删除后不可恢复。不要用 `vssadmin delete shadows` 代替，因为卷影副本还可能属于备份或文件历史。
-
-### Windows.old
-
-设置 → 系统 → 存储 → 临时文件 → “以前的 Windows 安装”；或磁盘清理 → 清理系统文件。确认不再需要回退旧版本 Windows 后再删除。
-
-### Windows 升级残留
-
-只有在确认升级完成或已取消、系统没有待重启的安装任务时，才使用 Windows 存储/磁盘清理。不要直接 `takeown` + 递归删除。
+原因：可重建，但清理后游戏可能短暂卡顿，不作为常规 C 盘清理。
 
 ## 不要清
 
 - `C:\Windows\Installer`
 - `C:\Windows\WinSxS` 内单个文件
 - `System Volume Information`
-- `Prefetch`（会影响启动性能）
-- `ProgramData\Package Cache`（会破坏修复/卸载）
-- 用户桌面、文档、下载中的未知文件
+- `Prefetch`
+- `ProgramData\Package Cache`
+- 用户桌面/文档/下载中的未知文件
 - 应用聊天记录和游戏存档

@@ -5,7 +5,7 @@ description: Use when the user wants to free space on the Windows C drive, diagn
 
 # C 盘安全清理（可执行 skill）
 
-目标是释放可重建缓存，而不是“看到大目录就删”。默认只读；真实删除必须同时带 `-Apply -Yes`；不可逆项只给官方界面步骤。
+目标是释放可重建缓存，而不是“看到大目录就删”。默认只读；真实删除必须同时带 `-Apply -Yes`。`-AllSafe` 启用除不可逆/改设置之外的可重建缓存；不可逆项只给官方界面步骤。
 
 ## 安全边界
 
@@ -25,11 +25,11 @@ $PS = 'powershell'   # PowerShell 7 可用 'pwsh'
 # 1. 只读体检
 & $PS -NoProfile -ExecutionPolicy Bypass -File "$Skill\scripts\scan.ps1"
 
-# 2. 试运行；不删除任何文件
-& $PS -NoProfile -ExecutionPolicy Bypass -File "$Skill\scripts\clean.ps1" -Level safe
+# 2. 试运行全部安全缓存；不删除任何文件
+& $PS -NoProfile -ExecutionPolicy Bypass -File "$Skill\scripts\clean.ps1" -Level safe -AllSafe
 
-# 3. 征得用户同意后清理默认安全项
-& $PS -NoProfile -ExecutionPolicy Bypass -File "$Skill\scripts\clean.ps1" -Level safe -Apply -Yes
+# 3. 征得用户同意后清理全部安全缓存
+& $PS -NoProfile -ExecutionPolicy Bypass -File "$Skill\scripts\clean.ps1" -Level safe -AllSafe -Apply -Yes
 
 # 4. 复测并对比
 & $PS -NoProfile -ExecutionPolicy Bypass -File "$Skill\scripts\scan.ps1"
@@ -40,6 +40,8 @@ $PS = 'powershell'   # PowerShell 7 可用 'pwsh'
 
 先报体检数字、风险级别、需要管理员或手动处理的项，再请求明确确认。用户拒绝或犹豫时，只交付体检与手动清单。
 
+当用户明确说“清理全部可安全清理的内容”时，使用 `-AllSafe`。它不包含回收站、诊断证据、休眠、DISM、还原点或 `Windows.old`。
+
 ## 自动化等级
 
 ### 默认安全项
@@ -48,6 +50,10 @@ $PS = 'powershell'   # PowerShell 7 可用 'pwsh'
 - Windows Temp（管理员）
 - 传递优化缓存（管理员）
 - Explorer 缩略图/图标缓存（占用文件跳过）
+- 浏览器缓存（`-AllSafe`）
+- Windows Update 下载缓存（管理员；`-AllSafe`；空闲时）
+
+`-AllSafe` 仍遵守“保留最近 24 小时文件”和“被占用就跳过”，不是强制删除。
 
 ### 必须显式开关
 
@@ -80,7 +86,7 @@ scan.ps1  [-Json] [-SkipSizes] [-OutFile <path>] [-TopApps N]
 clean.ps1 [-Level safe|deep] [-Apply] [-Yes] [-DryRun] [-Auto]
           [-Ids id1,id2] [-SkipIds id1]
           [-IncludeRecycleBin] [-IncludeBrowserCache] [-IncludeDiagnostics]
-          [-ResetUpdateCache] [-DisableHibernate] [-DismCleanup]
+          [-ResetUpdateCache] [-AllSafe] [-DisableHibernate] [-DismCleanup]
           [-SkipWuCache] [-CreateRestorePoint]
           [-SkipRecentHours N] [-Json] [-LogDir <path>]
 
@@ -88,6 +94,7 @@ guide.ps1 [-OutFile <path>] [-TopApps N]
 ```
 
 - `-SkipRecentHours N`：默认 24；设为 0 才会考虑最近修改的文件，必须由用户明确要求。
+- `-AllSafe`：等价启用浏览器缓存和空闲状态下的更新缓存清理；不包含任何不可逆项。
 - `-CreateRestorePoint`：管理员 deep 清理前尝试创建还原点；系统保护未开启时可能失败。
 - `-Json`：stdout 输出结构化结果，报告写入 `%LOCALAPPDATA%\c-drive-cleanup\reports`。
 
@@ -104,7 +111,7 @@ guide.ps1 [-OutFile <path>] [-TopApps N]
 - `Totals.DiagnosticsBytes`：排障证据体积，默认保留。
 - `Totals.DeepOptInBytes`：深度或仅手动项，不能据此推断脚本会删除。
 
-清理报告包含每项 `Status`、`BytesFreed` 与 `FreeSpaceDelta`。退出码：`0` 无异常；`2` 有跳过/部分完成/需手工；`1` 参数或致命错误。
+清理报告包含每项 `Status`、`BytesFreed` 与 `FreeSpaceDelta`。文件未删除时会区分占用、权限、近期保留和其他错误。退出码：`0` 无异常；`2` 有跳过/部分完成/需手工；`1` 参数或致命错误。
 
 ## 不要做
 

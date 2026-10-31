@@ -97,6 +97,8 @@ try {
     $real = Clear-FolderContents -Path $tree -SkipRecentHours 1 -AllowedRoots @($tree)
     Check '最近文件被保留' { Test-Path -LiteralPath $recent }
     Check '占用文件被保留' { Test-Path -LiteralPath $locked }
+    Check '近期文件单独计数' { $real.FilesRecent -ge 1 }
+    Check '占用文件识别为 locked' { $real.FilesLocked -ge 1 }
     Check '普通旧文件被删除' { -not (Test-Path -LiteralPath (Join-Path $tree 'a.txt')) }
     Check '嵌套旧文件被删除' { -not (Test-Path -LiteralPath (Join-Path $nested 'b.txt')) }
 } finally {

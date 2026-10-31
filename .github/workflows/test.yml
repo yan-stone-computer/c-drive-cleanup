@@ -39,6 +39,25 @@ jobs:
         shell: powershell
         run: .\scripts\tests\test-lib.ps1
 
+      - name: Verify AllSafe dry-run
+        shell: powershell
+        run: |
+          $reportDir = Join-Path $env:RUNNER_TEMP 'c-drive-cleanup-reports'
+          $json = & powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\clean.ps1 `
+            -Level safe -AllSafe -DryRun -Json -LogDir $reportDir | Out-String
+          if ($LASTEXITCODE -notin @(0, 2)) { throw "clean.ps1 exited with $LASTEXITCODE" }
+          $result = $json | ConvertFrom-Json
+          if ($result.SafetyProfile -ne 'safe-v2+allsafe') { throw 'AllSafe profile was not selected' }
+
+      - name: Verify manual checklist generation
+        shell: powershell
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'cleanup-checklist.md'
+          & powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\guide.ps1 -OutFile $out -TopApps 1
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $out)) { throw 'guide.ps1 failed' }
+          $text = Get-Content -Raw -Encoding UTF8 -LiteralPath $out
+          if ($text -notmatch '最近一次清理未完成' -or $text -notmatch '手动操作') { throw 'manual guidance missing' }
+
       - name: Validate skill metadata
         shell: powershell
         run: |

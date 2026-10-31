@@ -1,9 +1,9 @@
 ﻿#Requires -Version 5.1
 <#
-  生成 C 盘清理行动清单（Markdown）：
-  - 脚本可自动完成的项
-  - 需显式开关的可选项与深度项
-  - 只能手动做的迁移/设置（对齐视频里的 12 步）
+  生成 C 盘清理行动清单：
+  - 代理可直接执行的安全缓存
+  - 需要管理员或显式风险确认的项
+  - 最近一次清理未完成项及精确路径、原因、手动步骤
 #>
 [CmdletBinding()]
 param(
@@ -13,7 +13,6 @@ param(
 
 $ErrorActionPreference = 'Continue'
 $here = Split-Path -Parent $PSCommandPath
-$skillRoot = Split-Path -Parent $here
 . (Join-Path $here 'lib.ps1')
 . (Join-Path $here 'lib-audit.ps1')
 
@@ -26,16 +25,136 @@ if (-not $OutFile) {
 
 $scanScript = Join-Path $here 'scan.ps1'
 $cleanScript = Join-Path $here 'clean.ps1'
-
 $v = $audit.Volume
 $t = $audit.Totals
 $safeRows = @($audit.Candidates | Where-Object { $_.Level -eq 'safe' -and -not $_.OptIn -and $_.Exists } | Sort-Object Bytes -Descending)
 $optSafeRows = @($audit.Candidates | Where-Object { $_.Level -eq 'safe' -and $_.OptIn -and $_.Exists } | Sort-Object Bytes -Descending)
 $byId = @{}
 foreach ($c in $audit.Candidates) { $byId[$c.Id] = $c }
-$deepRows = @()
-foreach ($id in @('winsxs-dism', 'hibernate', 'windows-upgrade-temp', 'windows-old', 'restore-points')) {
-    if ($byId.ContainsKey($id)) { $deepRows += $byId[$id] }
+
+function Get-ManualGuidance([string]$Id) {
+    $local = Get-LocalAppDataDir
+    switch ($Id) {
+        'user-temp' {
+            return [pscustomobject]@{
+                Path = (Join-Path $local 'Temp')
+                Reason = '应用或代理进程仍在读写文件；删除正在使用的临时文件可能破坏未保存工作。'
+                Action = '退出相关应用后重试；仍有锁定文件时注销或重启，再运行本 skill。不要强制结束未知进程。'
+            }
+        }
+        'thumbnail-cache' {
+            return [pscustomobject]@{
+                Path = (Join-Path $local 'Microsoft\Windows\Explorer')
+                Reason = 'Explorer 持有 thumbcache/iconcache 数据库，运行中通常无法删除。'
+                Action = '关闭资源管理器窗口后重试；仍锁定可注销或重启。重启 Explorer 会短暂关闭桌面和任务栏。'
+            }
+        }
+        'windows-temp' {
+            return [pscustomobject]@{
+                Path = (Join-Path (Get-WindowsDir) 'Temp')
+                Reason = '系统 Temp 需要管理员权限。'
+                Action = '在“以管理员身份运行”的 PowerShell 中使用下方 -AllSafe 命令。'
+            }
+        }
+        'delivery-optimization' {
+            return [pscustomobject]@{
+                Path = (Join-Path (Get-WindowsDir) 'ServiceProfiles\NetworkService\AppData\Local\Microsoft\Windows\DeliveryOptimization\Cache')
+                Reason = '传递优化缓存由系统服务持有，需要管理员权限。'
+                Action = '使用下方 -AllSafe 管理员命令；脚本会跳过占用文件。'
+            }
+        }
+        'wu-download' {
+            return [pscustomobject]@{
+                Path = (Join-Path (Get-WindowsDir) 'SoftwareDistribution\Download')
+                Reason = '更新缓存需要管理员权限；更新安装中或 BITS 传输活跃时删除可能中断更新。'
+                Action = '确认没有待重启更新后，使用 -AllSafe 管理员命令；脚本不会停止 BITS/WU 服务。'
+            }
+        }
+        'wer-reports' {
+            return [pscustomobject]@{
+                Path = (Join-Path (Get-ProgramDataDir) 'Microsoft\Windows\WER')
+                Reason = '错误报告是排障证据，不是普通缓存。'
+                Action = '排障结束后如仍要删除，管理员运行 -IncludeDiagnostics。'
+            }
+        }
+        'cbs-logs' {
+            return [pscustomobject]@{
+                Path = (Join-Path (Get-WindowsDir) 'Logs\CBS')
+                Reason = 'CBS 日志用于诊断组件安装和系统修复失败。'
+                Action = '排障结束后如仍要删除，管理员运行 -IncludeDiagnostics。'
+            }
+        }
+        'memory-dumps' {
+            return [pscustomobject]@{
+                Path = "$(Join-Path (Get-WindowsDir) 'MEMORY.DMP'); $(Join-Path (Get-WindowsDir) 'Minidump'); $(Join-Path $local 'CrashDumps')"
+                Reason = '蓝屏和崩溃转储是定位驱动/应用故障的关键证据。'
+                Action = '确认不再分析故障后，管理员运行 -IncludeDiagnostics。'
+            }
+        }
+        'recycle-bin' {
+            return [pscustomobject]@{
+                Path = 'C 盘回收站'
+                Reason = '清空后不可恢复，可能包含误删文件。'
+                Action = '打开回收站逐项确认，或明确同意后再使用 -IncludeRecycleBin。'
+            }
+        }
+        'browser-cache' {
+            return [pscustomobject]@{
+                Path = (($byId['browser-cache'].Paths) -join '; ')
+                Reason = '浏览器运行时会锁定缓存；清理后首次访问站点会变慢。'
+                Action = '可先运行 -AllSafe；若仍有锁定项，关闭 Edge/Chrome 后重试。'
+            }
+        }
+        'hibernate' {
+            return [pscustomobject]@{
+                Path = 'C:\hiberfil.sys'
+                Reason = '关闭休眠会同时关闭快速启动，属于系统设置变更。'
+                Action = '明确接受后，在管理员终端执行 powercfg -h off 或使用 -DisableHibernate。'
+            }
+        }
+        'winsxs-dism' {
+            return [pscustomobject]@{
+                Path = 'C:\Windows\WinSxS'
+                Reason = '不能手动删除组件；DISM 清理耗时长，并会失去部分旧更新的卸载能力。'
+                Action = '管理员运行 Dism.exe /Online /Cleanup-Image /AnalyzeComponentStore 后再决定。'
+            }
+        }
+        'windows-old' {
+            return [pscustomobject]@{
+                Path = 'C:\Windows.old'
+                Reason = '删除后不能回退到上一版本 Windows，直接改 ACL/递归删除还有恢复风险。'
+                Action = '设置 → 系统 → 存储 → 临时文件 → “以前的 Windows 安装”；或磁盘清理 → 清理系统文件。'
+            }
+        }
+        'windows-upgrade-temp' {
+            return [pscustomobject]@{
+                Path = 'C:\$Windows.~BT; C:\$Windows.~WS'
+                Reason = '升级安装或回滚可能仍在使用，自动递归删除不安全。'
+                Action = '确认升级完成或已取消后，使用 Windows 设置/磁盘清理中的临时文件。'
+            }
+        }
+        'restore-points' {
+            return [pscustomobject]@{
+                Path = 'System Volume Information（由系统管理）'
+                Reason = 'VSS 卷影不等于系统还原点，vssadmin 删除 oldest 会误伤备份历史。'
+                Action = '系统属性 → 系统保护 → 配置；只通过官方界面删除还原点。'
+            }
+        }
+        'pagefile' {
+            return [pscustomobject]@{
+                Path = 'C:\pagefile.sys'
+                Reason = '分页文件被系统锁定，迁移会影响虚拟内存设置。'
+                Action = '高级系统设置 → 性能 → 虚拟内存，把分页文件迁到其他分区并重启。'
+            }
+        }
+        default {
+            return [pscustomobject]@{
+                Path = ''
+                Reason = '需要人工确认当前应用状态或该项目的业务含义。'
+                Action = '查看 references/manual-steps.md。'
+            }
+        }
+    }
 }
 
 $sb = New-Object System.Text.StringBuilder
@@ -49,84 +168,91 @@ if ($v) {
     Add-Line ('C: 总 ' + (Format-Size $v.TotalBytes) + ' / 可用 ' + (Format-Size $v.FreeBytes) + '（' + $v.FreePercent + '%）')
 }
 Add-Line ''
-Add-Line '## 一、脚本可自动清理（无需逐项开关）'
+Add-Line '## 一、代理可直接执行的安全清理'
 Add-Line ''
-Add-Line '| 项目 | 体积 | 需要管理员 | 说明 |'
-Add-Line '| --- | ---: | --- | --- |'
-foreach ($c in $safeRows) {
-    Add-Line ('| ' + $c.Name + ' | ' + (Format-Size $c.Bytes) + ' | ' + $(if ($c.RequiresAdmin) { '是' } else { '否' }) + ' | ' + $c.Note + ' |')
-}
-Add-Line ''
-Add-Line '```powershell'
-Add-Line ('powershell -NoProfile -ExecutionPolicy Bypass -File "' + $scanScript + '"                # 只读体检')
-Add-Line ('powershell -NoProfile -ExecutionPolicy Bypass -File "' + $cleanScript + '" -Level safe            # 试运行')
-Add-Line ('powershell -NoProfile -ExecutionPolicy Bypass -File "' + $cleanScript + '" -Level safe -Apply -Yes # 真正清理')
-Add-Line '```'
-Add-Line ''
-Add-Line '## 二、需显式开关的可选项'
-Add-Line ''
-Add-Line '| 项目 | 体积 | 开关 |'
+Add-Line '| 项目 | 体积 | 权限 |'
 Add-Line '| --- | ---: | --- |'
-foreach ($c in $optSafeRows) {
-    $flag = switch ($c.Id) {
-        'recycle-bin' { '-IncludeRecycleBin' }
-        'browser-cache' { '-IncludeBrowserCache' }
-        'wer-reports' { '-IncludeDiagnostics' }
-        'cbs-logs' { '-IncludeDiagnostics' }
-        'memory-dumps' { '-IncludeDiagnostics' }
-        'wu-download' { '-ResetUpdateCache' }
-        default { '-' }
-    }
-    Add-Line ('| ' + $c.Name + ' | ' + (Format-Size $c.Bytes) + ' | ' + $flag + ' |')
+foreach ($c in $safeRows) {
+    Add-Line ('| ' + $c.Name + ' | ' + (Format-Size $c.Bytes) + ' | ' + $(if ($c.RequiresAdmin) { '管理员' } else { '当前用户' }) + ' |')
 }
 Add-Line ''
-Add-Line '## 三、深度释放（需要管理员 + 逐项开关）'
-Add-Line ''
-Add-Line '| 项目 | 体积 | 开关 | 说明 |'
-Add-Line '| --- | ---: | --- | --- |'
-foreach ($c in $deepRows) {
-    $flag = switch ($c.Id) {
-        'winsxs-dism' { '-DismCleanup' }
-        'hibernate' { '-DisableHibernate' }
-        'windows-upgrade-temp' { '手动：存储/磁盘清理' }
-        'windows-old' { '手动：存储/磁盘清理' }
-        'restore-points' { '手动：系统保护' }
-        default { '-' }
-    }
-    $size = if ($c.Id -eq 'winsxs-dism') { '1-5 GB' } elseif ($c.Id -eq 'restore-points') { '未知' } elseif ($c.Exists) { Format-Size $c.Bytes } else { '未检测到' }
-    Add-Line ('| ' + $c.Name + ' | ' + $size + ' | ' + $flag + ' | ' + $c.Note + ' |')
-}
-Add-Line ''
-Add-Line '管理员终端执行（会弹 UAC；只对可逆或经系统服务的项加开关）：'
+Add-Line '`-AllSafe` 会额外处理可重建的浏览器缓存和更新下载缓存；不会处理回收站、诊断证据、休眠、还原点或 Windows.old。'
 Add-Line ''
 Add-Line '```powershell'
-Add-Line ('powershell -NoProfile -ExecutionPolicy Bypass -File "' + $cleanScript + '" -Level deep -Apply -Yes `')
-Add-Line '  -DismCleanup -DisableHibernate'
+Add-Line ('powershell -NoProfile -ExecutionPolicy Bypass -File "' + $scanScript + '"')
+Add-Line ('powershell -NoProfile -ExecutionPolicy Bypass -File "' + $cleanScript + '" -Level safe -AllSafe')
+Add-Line ('powershell -NoProfile -ExecutionPolicy Bypass -File "' + $cleanScript + '" -Level safe -AllSafe -Apply -Yes')
 Add-Line '```'
 Add-Line ''
-Add-Line '> 安全边界：`-DisableHibernate` 会关闭休眠和快速启动；DISM 不可在运行中强制终止。还原点、Windows.old 和升级残留只能从 Windows 官方界面手动删除。'
+
+Add-Line '## 二、可执行但需要单独风险确认'
 Add-Line ''
-Add-Line '## 四、只能手动做的设置（视频里的长期预防）'
+Add-Line '| 项目 | 体积 | 原因 | 操作 |'
+Add-Line '| --- | ---: | --- | --- |'
+foreach ($c in $optSafeRows) {
+    if ($c.Id -eq 'browser-cache' -or $c.Id -eq 'wu-download') { continue }
+    $g = Get-ManualGuidance $c.Id
+    Add-Line ('| ' + $c.Name + ' | ' + (Format-Size $c.Bytes) + ' | ' + $g.Reason + ' | ' + $g.Action + ' |')
+}
 Add-Line ''
-Add-Line '1. **迁移用户文件夹**（文档 / 下载 / 图片 / 桌面）：右键文件夹 → 属性 → 位置 → 移动 → 选 D 盘目录。'
-Add-Line '2. **虚拟内存迁到其他分区**：设置 → 系统 → 系统信息 → 高级系统设置 → 性能设置 → 高级 → 更改虚拟内存；取消自动管理，C 盘设为“无分页文件”，目标盘设为“系统托管”，重启生效。'
+
+Add-Line '## 三、最近一次清理未完成'
+Add-Line ''
+$lastCleanPath = Join-Path (Join-Path $script:CleanupHome 'reports') 'latest-clean.json'
+$manualNeeded = @()
+if (Test-PathSafe $lastCleanPath) {
+    try {
+        $lastClean = Get-Content -Raw -Encoding UTF8 -LiteralPath $lastCleanPath | ConvertFrom-Json
+        $manualNeeded = @($lastClean.Results | Where-Object { $_.Status -notin @('ok', 'dry-run') })
+    } catch { }
+}
+if ($manualNeeded.Count -eq 0) {
+    Add-Line '没有读取到未完成项，或上一次清理没有失败/跳过；仍需检查下方手动操作与迁移项。'
+} else {
+    foreach ($r in $manualNeeded) {
+        $g = Get-ManualGuidance $r.Id
+        Add-Line ('### ' + $r.Name)
+        Add-Line ''
+        Add-Line ('- 状态：`' + $r.Status + '`')
+        Add-Line ('- 路径：`' + $g.Path + '`')
+        Add-Line ('- 原因：' + $g.Reason)
+        if ($r.Detail) { Add-Line ('- 本次结果：' + $r.Detail) }
+        Add-Line ('- 手动操作：' + $g.Action)
+        Add-Line ''
+    }
+}
+
+Add-Line '## 四、管理员或长期维护项'
+Add-Line ''
+Add-Line '1. **Windows Temp / 传递优化 / 更新缓存**：需要管理员权限。普通终端无法提权，运行 `-AllSafe` 的管理员命令后由用户确认 UAC。'
+Add-Line '2. **DISM / WinSxS**：先运行 `Dism.exe /Online /Cleanup-Image /AnalyzeComponentStore`，确认收益后再考虑 `/StartComponentCleanup`；不可中途强杀。'
+Add-Line '3. **休眠**：`C:\hiberfil.sys` 由 `powercfg -h off` 管理；会关闭快速启动。'
+Add-Line '4. **还原点**：系统属性 → 系统保护 → 配置；不要用 `vssadmin delete shadows`。'
+Add-Line '5. **Windows.old / 升级残留**：设置 → 系统 → 存储 → 临时文件，或磁盘清理 → 清理系统文件。'
+Add-Line ''
+
+Add-Line '## 五、只能迁移或人工确认'
+Add-Line ''
+Add-Line '1. **用户文件夹**：桌面/文档/下载/图片/视频/音乐 → 属性 → 位置 → 移动；不要删除唯一副本。'
+Add-Line '2. **虚拟内存**：设置 → 系统 → 系统信息 → 高级系统设置 → 性能设置 → 高级 → 虚拟内存；迁移后重启。'
 if ($audit.Pagefile -and @($audit.Pagefile.Entries).Count -gt 0) {
     foreach ($p in $audit.Pagefile.Entries) {
         Add-Line ('   - 当前分页文件：' + $p.Name + '，' + $p.AllocatedMB + ' MB')
     }
 }
-Add-Line '3. **应用缓存搬家**：微信 / QQ / 网易云音乐等在各自设置里把存储路径改到 D 盘。'
+Add-Line '3. **应用数据**：微信/QQ/企业微信/钉钉等在各应用设置内迁移，不要直接删除聊天记录目录。'
 foreach ($a in @($audit.AppCaches)) {
-    Add-Line ('   - 检测到 ' + $a.Name + ' 数据目录 ' + (Format-Size $a.Bytes) + '：' + ($a.Paths -join '；'))
+    Add-Line ('   - 检测到 ' + $a.Name + '：' + (Format-Size $a.Bytes) + '；' + ($a.Paths -join '；'))
 }
-Add-Line '4. **安装软件不要一路下一步**：安装向导里把路径从 C:\Program Files 改成 D:\Apps。'
+Add-Line '4. **开发者缓存**：npm/pnpm/pip/NuGet 可按需清理，离线环境或计量网络下不要清。'
+Add-Line '5. **Shader / DirectX 缓存**：可重建，但清理后可能短暂卡顿，不建议常规自动处理。'
 if ($audit.StorageSense) {
     $ss = $audit.StorageSense
-    $state = if ($ss.Enabled) { '已开启' } else { '未开启' }
-    Add-Line ('5. **存储感知**：当前' + $state + '。设置 → 系统 → 存储 → 存储感知；建议开启并设置每月清理临时文件、回收站。')
+    Add-Line ('6. **存储感知**：当前' + $(if ($ss.Enabled) { '已开启' } else { '未开启' }) + '；设置 → 系统 → 存储 → 存储感知。')
 }
 Add-Line ''
-Add-Line '## 五、体积参考'
+
+Add-Line '## 六、体积参考'
 Add-Line ''
 Add-Line '| 项目 | 体积 |'
 Add-Line '| --- | ---: |'
@@ -139,15 +265,7 @@ if ($audit.TopApps.Count -gt 0) {
     }
 }
 Add-Line ''
-Add-Line '## 六、确认清单'
-Add-Line ''
-Add-Line '- [ ] 已备份重要文件（清理前）'
-Add-Line '- [ ] 已运行 `scan.ps1` 并确认清单'
-Add-Line '- [ ] 安全项已用 `clean.ps1 -Level safe -Apply -Yes` 清理'
-Add-Line '- [ ] 深度项已在管理员终端逐项确认执行'
-Add-Line '- [ ] 已设置存储感知 / 迁移缓存 / 迁移下载目录'
-Add-Line ''
-Add-Line ('预计普通权限默认可释放：' + (Format-Size $t.SafeUserBytes) + '；需开关的安全项：' + (Format-Size $t.RequiresOptInBytes) + '；管理员可再释放：' + (Format-Size ([long]$t.SafeAdminBytes + [long]$t.DeepAutoBytes)))
+Add-Line ('预计普通权限默认可释放：' + (Format-Size $t.SafeUserBytes) + '；管理员默认项：' + (Format-Size $t.SafeAdminBytes) + '；需显式开关：' + (Format-Size $t.RequiresOptInBytes))
 
 $text = $sb.ToString()
 $dir = Split-Path -Parent $OutFile

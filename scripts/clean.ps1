@@ -17,6 +17,7 @@ param(
     [switch]$IncludeBrowserCache,
     [switch]$IncludeDiagnostics,
     [switch]$ResetUpdateCache,
+    [switch]$AllSafe,
     [switch]$DisableHibernate,
     # 为兼容旧命令保留；这些不可逆自动化操作会被明确拒绝。
     [switch]$PruneRestorePoints,
@@ -38,6 +39,12 @@ $here = Split-Path -Parent $PSCommandPath
 . (Join-Path $here 'lib-actions.ps1')
 
 # ------------------------------------------------------------ 参数安全闸
+
+if ($AllSafe) {
+    # 只启用可在不破坏回退数据、不停止共享服务的前提下重建的缓存。
+    $IncludeBrowserCache = $true
+    $ResetUpdateCache = $true
+}
 
 $irreversibleAutomation = $PruneRestorePoints -or $RemoveWindowsOld -or $RemoveWindowsUpgradeTemp
 if ($irreversibleAutomation) {
@@ -245,12 +252,20 @@ foreach ($p in $plan) {
         switch ($c.Kind) {
             'tree-contents' {
                 $skippedTotal = 0
+                $recentTotal = 0
+                $lockedTotal = 0
+                $deniedTotal = 0
+                $failedTotal = 0
                 $hadError = ''
                 foreach ($path in @($c.Paths)) {
                     if (-not (Test-PathSafe $path)) { continue }
                     $r = Clear-FolderContents -Path $path -SkipRecentHours $SkipRecentHours -AllowedRoots @($path)
                     $filesDeleted += $r.FilesDeleted
                     $skippedTotal += $r.FilesSkipped
+                    $recentTotal += $r.FilesRecent
+                    $lockedTotal += $r.FilesLocked
+                    $deniedTotal += $r.FilesDenied
+                    $failedTotal += $r.FilesFailed
                     if ($r.Status -eq 'failed') { $hadError = $r.Error; $status = 'partial' }
                 }
                 $after = [long]0
@@ -259,17 +274,23 @@ foreach ($p in $plan) {
                 $freed = [Math]::Max([long]0, $before - $after)
                 if ($freed -gt 0) {
                     $detail = "释放 $(Format-Size $freed)"
-                    if ($skippedTotal -gt 0) { $detail += "（跳过 $skippedTotal 个占用文件）" }
+                    if ($skippedTotal -gt 0 -or $recentTotal -gt 0) {
+                        $detail += "（跳过：占用 $lockedTotal，权限 $deniedTotal，其他 $failedTotal；近期保留 $recentTotal）"
+                    }
                 } elseif ($hadError) {
                     $status = 'partial'; $detail = "失败：$hadError"
                 } elseif ($skippedTotal -gt 0) {
-                    $status = 'partial'; $detail = "没有释放，$skippedTotal 个文件被占用"
+                    $status = 'partial'; $detail = "没有释放（占用 $lockedTotal，权限 $deniedTotal，其他 $failedTotal；近期保留 $recentTotal）"
                 } else {
                     $detail = '目录为空，无需清理'
                 }
             }
             'files' {
                 $fileSkipped = 0
+                $fileRecent = 0
+                $fileLocked = 0
+                $fileDenied = 0
+                $fileFailed = 0
                 foreach ($path in @($c.Paths)) {
                     if (-not (Test-PathSafe $path)) { continue }
                     $null = Assert-SafeDeletePath -Path $path -AllowedRoots @($path) -AllowRootItself
@@ -281,12 +302,19 @@ foreach ($p in $plan) {
                             try { $files = @(Get-ChildItem -LiteralPath $path -Filter $pat -File -Force -ErrorAction SilentlyContinue) } catch { }
                             foreach ($f in $files) {
                                 try {
-                                    if ($SkipRecentHours -gt 0 -and $f.LastWriteTime -gt (Get-Date).AddHours(-$SkipRecentHours)) { $fileSkipped++; continue }
+                                    if ($SkipRecentHours -gt 0 -and $f.LastWriteTime -gt (Get-Date).AddHours(-$SkipRecentHours)) { $fileRecent++; continue }
                                     $len = [long]$f.Length
                                     Remove-FileForCleanup -Path $f.FullName
                                     $freed += $len
                                     $filesDeleted++
-                                } catch { $fileSkipped++ }
+                                } catch {
+                                    $fileSkipped++
+                                    switch (Get-CleanupFailureKind $_) {
+                                        'locked' { $fileLocked++ }
+                                        'denied' { $fileDenied++ }
+                                        default { $fileFailed++ }
+                                    }
+                                }
                             }
                         }
                     } else {
@@ -295,11 +323,21 @@ foreach ($p in $plan) {
                             Remove-FileForCleanup -Path $item.FullName
                             $freed += $len
                             $filesDeleted++
-                        } catch { $fileSkipped++ }
+                        } catch {
+                            $fileSkipped++
+                            switch (Get-CleanupFailureKind $_) {
+                                'locked' { $fileLocked++ }
+                                'denied' { $fileDenied++ }
+                                default { $fileFailed++ }
+                            }
+                        }
                     }
                 }
                 $detail = "删除 $filesDeleted 个文件"
-                if ($freed -eq 0 -and $fileSkipped -gt 0) { $status = 'partial'; $detail = "没有释放，$fileSkipped 个文件被占用" }
+                if ($freed -eq 0 -and ($fileSkipped -gt 0 -or $fileRecent -gt 0)) {
+                    $status = 'partial'
+                    $detail = "没有释放（占用 $fileLocked，权限 $fileDenied，其他 $fileFailed；近期保留 $fileRecent）"
+                }
                 elseif ($freed -eq 0) { $detail = '没有匹配文件，无需清理' }
             }
             'recycle' {
@@ -357,7 +395,7 @@ $actualDelta = [long]($freeAfter - $freeBefore)
 
 $summary = [pscustomobject]@{
     Schema = 'c-drive-cleanup-clean/1'
-    SafetyProfile = 'safe-v2'
+    SafetyProfile = if ($AllSafe) { 'safe-v2+allsafe' } else { 'safe-v2' }
     GeneratedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
     Level = $Level
     Applied = $doApply

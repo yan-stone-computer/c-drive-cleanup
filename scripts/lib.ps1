@@ -571,6 +571,20 @@ function Test-ReparsePointInPath {
     return $false
 }
 
+function Get-CleanupFailureKind {
+    param([System.Management.Automation.ErrorRecord]$ErrorRecord)
+    $ex = $ErrorRecord.Exception
+    while ($ex) {
+        switch ($ex.HResult) {
+            -2147024864 { return 'locked' }  # ERROR_SHARING_VIOLATION
+            -2147024863 { return 'locked' }  # ERROR_LOCK_VIOLATION
+            -2147024891 { return 'denied' }  # ERROR_ACCESS_DENIED
+        }
+        $ex = $ex.InnerException
+    }
+    return 'failed'
+}
+
 function Remove-FileForCleanup {
     param([string]$Path)
     $attrs = [IO.File]::GetAttributes($Path)
@@ -597,7 +611,11 @@ function Remove-TreeBestEffort {
     )
     if (-not $AllowedRoots -or @($AllowedRoots).Count -eq 0) { throw "Remove-TreeBestEffort 缺少精确白名单根" }
     $fullPath = Assert-SafeDeletePath -Path $Path -AllowedRoots $AllowedRoots -AllowRootItself
-    $stats = [ordered]@{ FilesDeleted = 0; FilesSkipped = 0; DirsDeleted = 0; Bytes = [long]0 }
+    $stats = [ordered]@{
+        FilesDeleted = 0; FilesSkipped = 0; FilesRecent = 0; FilesLocked = 0
+        FilesDenied = 0; FilesFailed = 0; DirectoryErrors = 0
+        DirsDeleted = 0; Bytes = [long]0
+    }
     if (Test-ReparsePointInPath $fullPath) {
         $stats.FilesSkipped++
         return [pscustomobject]$stats
@@ -613,7 +631,7 @@ function Remove-TreeBestEffort {
             foreach ($f in [IO.Directory]::EnumerateFiles($d)) {
                 try {
                     $fi = New-Object IO.FileInfo -ArgumentList $f
-                    if ($cutoff -and $fi.LastWriteTime -gt $cutoff) { $stats.FilesSkipped++; continue }
+                    if ($cutoff -and $fi.LastWriteTime -gt $cutoff) { $stats.FilesRecent++; continue }
                     if ($DryRun) {
                         $stats.FilesDeleted++
                         $stats.Bytes += $fi.Length
@@ -622,18 +640,25 @@ function Remove-TreeBestEffort {
                         $stats.FilesDeleted++
                         $stats.Bytes += $fi.Length
                     }
-                } catch { $stats.FilesSkipped++ }
+                } catch {
+                    $stats.FilesSkipped++
+                    switch (Get-CleanupFailureKind $_) {
+                        'locked' { $stats.FilesLocked++ }
+                        'denied' { $stats.FilesDenied++ }
+                        default { $stats.FilesFailed++ }
+                    }
+                }
             }
-        } catch { }
+        } catch { $stats.DirectoryErrors++ }
         try {
             foreach ($sd in [IO.Directory]::EnumerateDirectories($d)) {
                 try {
                     $attr = [IO.File]::GetAttributes($sd)
                     if (($attr -band [IO.FileAttributes]::ReparsePoint) -ne 0) { $stats.FilesSkipped++; continue }
                     $stack.Push($sd)
-                } catch { }
+                } catch { $stats.DirectoryErrors++ }
             }
-        } catch { }
+        } catch { $stats.DirectoryErrors++ }
     }
     if (-not $DryRun) {
         for ($i = $dirs.Count - 1; $i -ge 0; $i--) {
@@ -660,7 +685,8 @@ function Clear-FolderContents {
         [string[]]$AllowedRoots = @()
     )
     $stats = [ordered]@{
-        Path = $Path; FilesDeleted = 0; FilesSkipped = 0; DirsRemoved = 0
+        Path = $Path; FilesDeleted = 0; FilesSkipped = 0; FilesRecent = 0
+        FilesLocked = 0; FilesDenied = 0; FilesFailed = 0; DirectoryErrors = 0; DirsRemoved = 0
         Bytes = [long]0; Status = 'ok'; Error = ''
     }
     $roots = @(Get-UniquePaths $AllowedRoots)
@@ -683,14 +709,21 @@ function Clear-FolderContents {
     foreach ($f in $files) {
         try {
             $fi = New-Object IO.FileInfo -ArgumentList $f
-            if ($cutoff -and $fi.LastWriteTime -gt $cutoff) { $stats.FilesSkipped++; continue }
+            if ($cutoff -and $fi.LastWriteTime -gt $cutoff) { $stats.FilesRecent++; continue }
             if ($DryRun) {
                 $stats.FilesDeleted++; $stats.Bytes += $fi.Length
             } else {
                 Remove-FileForCleanup -Path $f
                 $stats.FilesDeleted++; $stats.Bytes += $fi.Length
             }
-        } catch { $stats.FilesSkipped++ }
+        } catch {
+            $stats.FilesSkipped++
+            switch (Get-CleanupFailureKind $_) {
+                'locked' { $stats.FilesLocked++ }
+                'denied' { $stats.FilesDenied++ }
+                default { $stats.FilesFailed++ }
+            }
+        }
     }
     # 顶层目录
     foreach ($d in $dirs) {
@@ -708,6 +741,11 @@ function Clear-FolderContents {
         $r = Remove-TreeBestEffort -Path $d -SkipRecentHours $SkipRecentHours -AllowedRoots $roots
         $stats.FilesDeleted += $r.FilesDeleted
         $stats.FilesSkipped += $r.FilesSkipped
+        $stats.FilesRecent += $r.FilesRecent
+        $stats.FilesLocked += $r.FilesLocked
+        $stats.FilesDenied += $r.FilesDenied
+        $stats.FilesFailed += $r.FilesFailed
+        $stats.DirectoryErrors += $r.DirectoryErrors
         $stats.DirsRemoved += $r.DirsDeleted
         $stats.Bytes += $r.Bytes
     }

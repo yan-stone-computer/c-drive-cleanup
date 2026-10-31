@@ -1,0 +1,4 @@
+interface:
+  display_name: "C盘清理"
+  short_description: "C 盘安全体检、分级缓存清理与默认 dry-run"
+  default_prompt: "Use $c-drive-cleanup to audit C drive space, clean all safe caches, and report manual actions with exact paths."

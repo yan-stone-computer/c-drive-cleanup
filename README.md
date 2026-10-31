@@ -9,7 +9,7 @@
 [![CI](https://github.com/yan-stone-computer/c-drive-cleanup/actions/workflows/test.yml/badge.svg)](https://github.com/yan-stone-computer/c-drive-cleanup/actions/workflows/test.yml)
 [![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white)](#适用环境)
 [![PowerShell 5.1+](https://img.shields.io/badge/PowerShell-5.1%2B-5391FE?logo=powershell&logoColor=white)](#适用环境)
-[![Tests](https://img.shields.io/badge/safety_tests-37%20passed-2ea44f)](#验证)
+[![Tests](https://img.shields.io/badge/safety_tests-39%20passed-2ea44f)](#验证)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/yan-stone-computer/c-drive-cleanup?style=social)](https://github.com/yan-stone-computer/c-drive-cleanup)
 
@@ -53,11 +53,11 @@ Set-Location .\c-drive-cleanup
 # 1) 只读体检
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\scan.ps1
 
-# 2) 试运行：不会删除
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\clean.ps1 -Level safe
+# 2) 试运行全部安全缓存：不会删除
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\clean.ps1 -Level safe -AllSafe
 
-# 3) 确认清单后，才执行默认安全项
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\clean.ps1 -Level safe -Apply -Yes
+# 3) 确认清单后，执行全部安全缓存清理
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\clean.ps1 -Level safe -AllSafe -Apply -Yes
 
 # 4) 复测
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\scan.ps1
@@ -85,7 +85,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\scan.ps1
 
 ## 能自动化什么
 
-### 默认安全项
+### 默认安全项与 `-AllSafe`
 
 | 项目 | 说明 |
 | --- | --- |
@@ -93,6 +93,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\scan.ps1
 | `C:\Windows\Temp` | 需要管理员；占用文件跳过 |
 | 传递优化缓存 | Windows 更新 P2P 缓存 |
 | 缩略图 / 图标缓存 | Explorer 自动重建 |
+| 浏览器缓存 | `-AllSafe` 启用；不清 Cookie、密码、历史 |
+| Windows Update 下载缓存 | 管理员 + `-AllSafe`；不停止 BITS/WU，活动任务时跳过 |
+
+`-AllSafe` 是建议给代理使用的完整安全档位，但仍会保留最近 24 小时文件、跳过占用文件，不包含回收站、诊断证据、休眠、DISM、还原点或 Windows.old。
 
 ### 必须显式开启
 
@@ -105,12 +109,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\scan.ps1
 | `-DisableHibernate` | `powercfg -h off` | 关闭休眠和快速启动 |
 | `-DismCleanup` | DISM 清理被取代组件 | 时间较长，不能中途强杀 |
 
+`-AllSafe` 已包含浏览器缓存和更新下载缓存；单独出现的这两个开关仍可用于精细控制。
+
 示例：
 
 ```powershell
-# 浏览器缓存 + 回收站（确认回收站无需恢复）
+# 全部安全缓存（推荐）
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\clean.ps1 `
-  -Level safe -Apply -Yes -IncludeBrowserCache -IncludeRecycleBin
+  -Level safe -AllSafe -Apply -Yes
+
+# 额外清空回收站（确认无需恢复）
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\clean.ps1 `
+  -Level safe -AllSafe -Apply -Yes -IncludeRecycleBin
 
 # 管理员：关闭休眠
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\clean.ps1 `
@@ -183,7 +193,9 @@ FreeSpaceDelta                清理前后实际空间变化
 ## 手动清理清单
 
 Windows.old、系统还原点、虚拟内存、用户文件夹和微信/QQ 数据不是“垃圾”。  
-详细的 Windows 11 操作路径、开发者缓存和迁移建议见：
+`guide.ps1` 会读取最近一次清理结果，列出仍未完成的项、精确路径、失败原因和手动步骤。
+
+完整路径与操作见：
 
 [`references/manual-steps.md`](references/manual-steps.md)
 
@@ -201,10 +213,10 @@ Windows.old、系统还原点、虚拟内存、用户文件夹和微信/QQ 数�
 仓库根目录就是 skill 目录。可把仓库放在：
 
 ```text
-%USERPROFILE%\.agents\skills\c-drive-cleanup
+%USERPROFILE%\.codex\skills\c-drive-cleanup
 ```
 
-之后在 Codex 里直接说“帮我安全清理 C 盘”，skill 会先体检和 dry-run，不会在未确认时删除。
+之后在 Codex 里直接说“清理 C 盘”，skill 会先体检、执行 `-AllSafe` dry-run，并在用户确认后清理全部可重建的安全缓存。
 
 ## 验证
 
@@ -214,7 +226,7 @@ Windows.old、系统还原点、虚拟内存、用户文件夹和微信/QQ 数�
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\tests\test-lib.ps1
 ```
 
-当前覆盖 **37 项断言**，包括：
+当前覆盖 **39 项断言**，包括：
 
 - 盘符根、UNC、用户资料、系统目录拒绝
 - `TEMP/TMP` 环境变量污染
