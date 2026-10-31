@@ -11,7 +11,7 @@
 [![CI](https://github.com/yan-stone-computer/c-drive-cleanup/actions/workflows/test.yml/badge.svg)](https://github.com/yan-stone-computer/c-drive-cleanup/actions/workflows/test.yml)
 [![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white)](#适用环境)
 [![PowerShell 5.1+](https://img.shields.io/badge/PowerShell-5.1%2B-5391FE?logo=powershell&logoColor=white)](#适用环境)
-[![Tests](https://img.shields.io/badge/safety_tests-46%20passed-2ea44f)](#验证)
+[![Tests](https://img.shields.io/badge/safety_tests-49%20passed-2ea44f)](#验证)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/yan-stone-computer/c-drive-cleanup?style=social)](https://github.com/yan-stone-computer/c-drive-cleanup)
 
@@ -274,7 +274,7 @@ Windows.old、系统还原点、虚拟内存、用户文件夹和微信/QQ 数�
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\tests\test-lib.ps1
 ```
 
-当前覆盖 **46 项断言**，包括：
+当前覆盖 **49 项断言**，包括：
 
 - 盘符根、UNC、用户资料、系统目录拒绝
 - `TEMP/TMP` 环境变量污染

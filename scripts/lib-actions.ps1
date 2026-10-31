@@ -41,6 +41,18 @@ function Invoke-ProcessCapture {
     }
 }
 
+function Test-ServicingFailureOutput {
+    param([string]$Text)
+    if (-not $Text) { return $false }
+    return ($Text -match '(?im)\bError:\s*\d+|Access is denied|HRESULT=80070005|0x80070005')
+}
+
+function Get-ShadowCopyCountFromText {
+    param([string]$Text)
+    if (-not $Text) { return 0 }
+    return ([regex]::Matches($Text, '(?im)^\s*(Shadow Copy ID|卷影副本 ID)\s*:')).Count
+}
+
 function Invoke-DismCleanup {
     $exe = Join-Path (Get-WindowsDir) 'System32\Dism.exe'
     if (-not (Test-PathSafe $exe)) {
@@ -55,7 +67,11 @@ function Invoke-DismCleanup {
         $tail = @($r.Output -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -Last 6)
     }
     $status = 'ok'
-    if ($null -ne $r.ExitCode -and $r.ExitCode -ne 0 -and $r.ExitCode -ne 3010) { $status = 'failed' }
+    if (Test-ServicingFailureOutput $r.Output) {
+        $status = 'failed'
+    } elseif ($null -ne $r.ExitCode -and $r.ExitCode -ne 0 -and $r.ExitCode -ne 3010) {
+        $status = 'failed'
+    }
     return [pscustomobject]@{
         Status  = $status
         Bytes   = [long]0
@@ -232,12 +248,19 @@ function Invoke-RemoveAllShadowCopies {
         return [pscustomobject]@{ Status = 'needs-admin'; Bytes = [long]0; Output = '需要管理员权限' }
     }
     $vssadmin = Join-Path (Get-WindowsDir) 'System32\vssadmin.exe'
+    $listBefore = Invoke-ProcessCapture -FilePath $vssadmin -Arguments @('list', 'shadows', '/for=C:')
+    $countBefore = Get-ShadowCopyCountFromText $listBefore.Output
+    if ($null -ne $listBefore.ExitCode -and $listBefore.ExitCode -eq 0 -and $countBefore -eq 0) {
+        return [pscustomobject]@{ Status = 'ok'; Bytes = [long]0; Output = '未检测到 C 盘 VSS 卷影，无需删除' }
+    }
     $r = Invoke-ProcessCapture -FilePath $vssadmin -Arguments @('delete', 'shadows', '/for=C:', '/all', '/quiet')
-    $ok = ($null -ne $r.ExitCode -and $r.ExitCode -eq 0)
+    $listAfter = Invoke-ProcessCapture -FilePath $vssadmin -Arguments @('list', 'shadows', '/for=C:')
+    $countAfter = Get-ShadowCopyCountFromText $listAfter.Output
+    $ok = ($null -ne $r.ExitCode -and $r.ExitCode -eq 0 -and $countAfter -eq 0)
     return [pscustomobject]@{
-        Status = if ($ok) { 'ok' } else { 'failed' }
+        Status = if ($ok) { 'ok' } elseif ($countAfter -lt $countBefore) { 'partial' } else { 'failed' }
         Bytes  = [long]0
-        Output = if ($ok) { '已删除 C 盘全部 VSS 卷影（AcceptRisk 已确认）' } else { $r.Output }
+        Output = if ($ok) { "已删除 C 盘全部 VSS 卷影（$countBefore -> 0，AcceptRisk 已确认）" } else { "卷影数量 $countBefore -> $countAfter；$($r.Output)" }
     }
 }
 

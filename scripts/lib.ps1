@@ -269,6 +269,11 @@ function Update-CandidateSize {
         return $Candidate
     }
     if ($Candidate.Kind -eq 'manual') {
+        if ($Candidate.FullKind -eq 'vss-all') {
+            $Candidate.Exists = $true
+            $Candidate.Measured = $false
+            return $Candidate
+        }
         $paths = @(Get-UniquePaths $Candidate.Paths)
         $stat = Get-PathStat -Paths $paths
         if ($stat) {

@@ -6,6 +6,7 @@
 $ErrorActionPreference = 'Continue'
 $here = Split-Path -Parent $PSCommandPath
 . (Join-Path $here '..\lib.ps1')
+. (Join-Path $here '..\lib-actions.ps1')
 
 $pass = 0
 $fail = 0
@@ -197,6 +198,8 @@ try {
 } finally {
     Remove-Item -LiteralPath $fullPlanDir -Recurse -Force -ErrorAction SilentlyContinue
 }
+Check 'DISM 输出 Access denied 判为失败' { Test-ServicingFailureOutput 'Error: 5 | Access is denied.' }
+Check 'VSS 输出卷影数量可解析' { (Get-ShadowCopyCountFromText "Shadow Copy ID: {abc}`nShadow Copy ID: {def}") -eq 2 }
 $fullCandidates = @(Get-CleanupCandidates)
 $fullIds = @('windows-old', 'windows-upgrade-temp', 'restore-points')
 $fullReady = $true
@@ -205,6 +208,9 @@ foreach ($id in $fullIds) {
     if (-not $candidate -or -not $candidate.FullKind) { $fullReady = $false }
 }
 Check '全清理系统项具有受控 FullKind' { $fullReady }
+$vssCandidate = $fullCandidates | Where-Object Id -eq 'restore-points' | Select-Object -First 1
+$null = Update-CandidateSize $vssCandidate
+Check 'VSS 全删能力不会因缺少路径被判 missing' { $vssCandidate.Exists -and $vssCandidate.FullKind -eq 'vss-all' }
 
 Write-Host ''
 Write-Host ("通过 $pass 项，失败 $fail 项")
