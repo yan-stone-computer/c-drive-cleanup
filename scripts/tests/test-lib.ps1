@@ -113,6 +113,20 @@ Check 'best-effort 删除文件' { $r.FilesDeleted -ge 1 }
 Check 'best-effort 删除后没有残留文件' { @(Get-ChildItem -LiteralPath $root2 -Recurse -File -Force -ErrorAction SilentlyContinue).Count -eq 0 }
 Remove-Item -LiteralPath $root2 -Recurse -Force -ErrorAction SilentlyContinue
 
+Write-Host '只读缓存'
+$rootReadOnly = Join-Path $env:TEMP ('c-drive-cleanup-readonly-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$readOnlyNested = Join-Path $rootReadOnly 'nested'
+New-Item -ItemType Directory -Path $readOnlyNested -Force | Out-Null
+$readOnlyTop = Join-Path $rootReadOnly 'top.cache'
+$readOnlyDeep = Join-Path $readOnlyNested 'deep.cache'
+Set-Content -LiteralPath $readOnlyTop -Value 'top' -NoNewline
+Set-Content -LiteralPath $readOnlyDeep -Value 'deep' -NoNewline
+[IO.File]::SetAttributes($readOnlyTop, [IO.FileAttributes]::Archive -bor [IO.FileAttributes]::ReadOnly)
+[IO.File]::SetAttributes($readOnlyDeep, [IO.FileAttributes]::Archive -bor [IO.FileAttributes]::ReadOnly)
+$rr = Clear-FolderContents -Path $rootReadOnly -SkipRecentHours 0 -AllowedRoots @($rootReadOnly)
+Check '只读缓存文件可以安全删除' { $rr.FilesDeleted -ge 2 -and -not (Test-Path -LiteralPath $readOnlyTop) -and -not (Test-Path -LiteralPath $readOnlyDeep) }
+Remove-Item -LiteralPath $rootReadOnly -Recurse -Force -ErrorAction SilentlyContinue
+
 Write-Host '重解析点'
 $linkRoot = Join-Path $env:TEMP ('c-drive-cleanup-link-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $linkTarget = Join-Path $linkRoot 'target'

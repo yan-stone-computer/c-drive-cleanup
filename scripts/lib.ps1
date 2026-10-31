@@ -571,6 +571,23 @@ function Test-ReparsePointInPath {
     return $false
 }
 
+function Remove-FileForCleanup {
+    param([string]$Path)
+    $attrs = [IO.File]::GetAttributes($Path)
+    $wasReadOnly = (($attrs -band [IO.FileAttributes]::ReadOnly) -ne 0)
+    if ($wasReadOnly) {
+        [IO.File]::SetAttributes($Path, ($attrs -bxor [IO.FileAttributes]::ReadOnly))
+    }
+    try {
+        [IO.File]::Delete($Path)
+    } catch {
+        if ($wasReadOnly) {
+            try { [IO.File]::SetAttributes($Path, $attrs) } catch { }
+        }
+        throw
+    }
+}
+
 function Remove-TreeBestEffort {
     param(
         [string]$Path,
@@ -601,7 +618,7 @@ function Remove-TreeBestEffort {
                         $stats.FilesDeleted++
                         $stats.Bytes += $fi.Length
                     } else {
-                        [IO.File]::Delete($f)
+                        Remove-FileForCleanup -Path $f
                         $stats.FilesDeleted++
                         $stats.Bytes += $fi.Length
                     }
@@ -670,7 +687,7 @@ function Clear-FolderContents {
             if ($DryRun) {
                 $stats.FilesDeleted++; $stats.Bytes += $fi.Length
             } else {
-                [IO.File]::Delete($f)
+                Remove-FileForCleanup -Path $f
                 $stats.FilesDeleted++; $stats.Bytes += $fi.Length
             }
         } catch { $stats.FilesSkipped++ }

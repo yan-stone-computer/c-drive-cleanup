@@ -283,7 +283,7 @@ foreach ($p in $plan) {
                                 try {
                                     if ($SkipRecentHours -gt 0 -and $f.LastWriteTime -gt (Get-Date).AddHours(-$SkipRecentHours)) { $fileSkipped++; continue }
                                     $len = [long]$f.Length
-                                    [IO.File]::Delete($f.FullName)
+                                    Remove-FileForCleanup -Path $f.FullName
                                     $freed += $len
                                     $filesDeleted++
                                 } catch { $fileSkipped++ }
@@ -292,7 +292,7 @@ foreach ($p in $plan) {
                     } else {
                         try {
                             $len = [long]$item.Length
-                            [IO.File]::Delete($item.FullName)
+                            Remove-FileForCleanup -Path $item.FullName
                             $freed += $len
                             $filesDeleted++
                         } catch { $fileSkipped++ }
