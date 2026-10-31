@@ -19,6 +19,11 @@ function Check([string]$Name, [scriptblock]$Test) {
         $script:fail++
     }
 }
+function Test-SamePath([string]$Left, [string]$Right) {
+    try {
+        return ([IO.Path]::GetFullPath($Left).TrimEnd('\') -ieq [IO.Path]::GetFullPath($Right).TrimEnd('\'))
+    } catch { return $false }
+}
 
 $root = Join-Path $env:TEMP ('c-drive-cleanup-test-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $tree = Join-Path $root 'tree'
@@ -47,7 +52,7 @@ try {
     Check '拒绝白名单外路径' { try { Assert-SafeDeletePath -Path 'C:\Windows\System32' -AllowedRoots @($env:TEMP); $false } catch { $true } }
     Check '拒绝通配符' { try { Assert-SafeDeletePath -Path (Join-Path $env:TEMP 'x*') -AllowedRoots @($env:TEMP); $false } catch { $true } }
     Check '拒绝删除根目录本身（默认）' { try { Assert-SafeDeletePath -Path $env:TEMP -AllowedRoots @($env:TEMP); $false } catch { $true } }
-    Check '允许清空根目录内容（AllowRootItself）' { (Assert-SafeDeletePath -Path $env:TEMP -AllowedRoots @($env:TEMP) -AllowRootItself) -ieq $env:TEMP }
+    Check '允许清空根目录内容（AllowRootItself）' { Test-SamePath (Assert-SafeDeletePath -Path $env:TEMP -AllowedRoots @($env:TEMP) -AllowRootItself) $env:TEMP }
     Check '拒绝系统关键目录（即使白名单给整棵 Windows）' {
         try { Assert-SafeDeletePath -Path 'C:\Windows\System32' -AllowedRoots @('C:\Windows') -AllowRootItself; $false } catch { $true }
     }
@@ -58,7 +63,7 @@ try {
     Check '缺少精确白名单根时拒绝' { try { Assert-SafeDeletePath -Path $tree; $false } catch { $true } }
     Check 'TEMP/TMP 去重' { @(Get-UniquePaths @($env:TEMP, $env:TMP)).Count -eq 1 }
     Check '盘符根路径不被 TrimEnd 破坏' { @(Get-UniquePaths @('C:\'))[0] -eq 'C:\' }
-    Check '允许 TEMP 子目录' { (Assert-SafeDeletePath -Path $tree -AllowedRoots @($env:TEMP)) -ieq $tree }
+    Check '允许 TEMP 子目录' { Test-SamePath (Assert-SafeDeletePath -Path $tree -AllowedRoots @($env:TEMP)) $tree }
 
     Write-Host '受信任临时目录'
     $oldTempEnv = $env:TEMP
@@ -66,7 +71,7 @@ try {
         $env:TEMP = (Join-Path $root 'not-a-temp-root')
         $safeTemp = @(Get-SafeUserTempPaths)
         $expectedTemp = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) 'Temp'
-        Check 'TEMP 环境变量不能改写删除根' { $safeTemp.Count -eq 1 -and $safeTemp[0] -ieq $expectedTemp }
+        Check 'TEMP 环境变量不能改写删除根' { $safeTemp.Count -eq 1 -and (Test-SamePath $safeTemp[0] $expectedTemp) }
     } finally {
         $env:TEMP = $oldTempEnv
     }
