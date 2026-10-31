@@ -11,8 +11,8 @@ param(
     [switch]$DryRun,
     [switch]$Yes,
     [switch]$Auto,
-    [string[]]$Ids,
-    [string[]]$SkipIds,
+    [string[]]$Ids = @(),
+    [string[]]$SkipIds = @(),
     [switch]$IncludeRecycleBin,
     [switch]$IncludeBrowserCache,
     [switch]$IncludeDiagnostics,
@@ -78,12 +78,8 @@ $vol0 = Get-CDriveInfo
 if ($vol0) { $freeBefore = $vol0.FreeBytes }
 
 $candidates = Get-CleanupCandidates
-if ($Ids) {
-    $Ids = @($Ids | ForEach-Object { ([string]$_).Split(',') } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-}
-if ($SkipIds) {
-    $SkipIds = @($SkipIds | ForEach-Object { ([string]$_).Split(',') } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-}
+$Ids = @(ConvertTo-CleanupIdList -Values $Ids)
+$SkipIds = @(ConvertTo-CleanupIdList -Values $SkipIds)
 $knownIds = @($candidates | ForEach-Object { $_.Id })
 $unknownIds = @($Ids | Where-Object { $_ -notin $knownIds })
 if ($unknownIds.Count -gt 0) {

@@ -62,6 +62,8 @@ try {
     }
     Check '缺少精确白名单根时拒绝' { try { Assert-SafeDeletePath -Path $tree; $false } catch { $true } }
     Check 'TEMP/TMP 去重' { @(Get-UniquePaths @($env:TEMP, $env:TMP)).Count -eq 1 }
+    Check '空清理项列表保持为空' { @(ConvertTo-CleanupIdList @()).Count -eq 0 }
+    Check '逗号分隔清理项正确拆分' { (@(ConvertTo-CleanupIdList @('user-temp,thumbnail-cache')).Count -eq 2) }
     Check '盘符根路径不被 TrimEnd 破坏' { @(Get-UniquePaths @('C:\'))[0] -eq 'C:\' }
     Check '允许 TEMP 子目录' { Test-SamePath (Assert-SafeDeletePath -Path $tree -AllowedRoots @($env:TEMP)) $tree }
 

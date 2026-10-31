@@ -95,6 +95,13 @@ function Get-UniquePaths {
     return $list.ToArray()
 }
 
+function ConvertTo-CleanupIdList {
+    param([string[]]$Values = @())
+    if (-not $Values -or $Values.Count -eq 0) { return @() }
+    return @($Values | ForEach-Object { ([string]$_).Split(',') } |
+        ForEach-Object { $_.Trim() } | Where-Object { $_ })
+}
+
 function Get-CDriveInfo {
     $d = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'" -ErrorAction SilentlyContinue
     if (-not $d) { return $null }
