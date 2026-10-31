@@ -53,6 +53,12 @@ function Get-ShadowCopyCountFromText {
     return ([regex]::Matches($Text, '(?im)^\s*(Shadow Copy ID|卷影副本 ID)\s*:')).Count
 }
 
+function Test-ShadowCopyNoneFound {
+    param([string]$Text)
+    if (-not $Text) { return $false }
+    return ($Text -match '(?im)No items found|No shadow copies|没有找到.*卷影|未找到.*卷影')
+}
+
 function Invoke-DismCleanup {
     $exe = Join-Path (Get-WindowsDir) 'System32\Dism.exe'
     if (-not (Test-PathSafe $exe)) {
@@ -250,7 +256,7 @@ function Invoke-RemoveAllShadowCopies {
     $vssadmin = Join-Path (Get-WindowsDir) 'System32\vssadmin.exe'
     $listBefore = Invoke-ProcessCapture -FilePath $vssadmin -Arguments @('list', 'shadows', '/for=C:')
     $countBefore = Get-ShadowCopyCountFromText $listBefore.Output
-    if ($null -ne $listBefore.ExitCode -and $listBefore.ExitCode -eq 0 -and $countBefore -eq 0) {
+    if ($countBefore -eq 0 -and -not (Test-ServicingFailureOutput $listBefore.Output)) {
         return [pscustomobject]@{ Status = 'ok'; Bytes = [long]0; Output = '未检测到 C 盘 VSS 卷影，无需删除' }
     }
     $r = Invoke-ProcessCapture -FilePath $vssadmin -Arguments @('delete', 'shadows', '/for=C:', '/all', '/quiet')

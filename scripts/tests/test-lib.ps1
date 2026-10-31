@@ -200,6 +200,7 @@ try {
 }
 Check 'DISM 输出 Access denied 判为失败' { Test-ServicingFailureOutput 'Error: 5 | Access is denied.' }
 Check 'VSS 输出卷影数量可解析' { (Get-ShadowCopyCountFromText "Shadow Copy ID: {abc}`nShadow Copy ID: {def}") -eq 2 }
+Check 'VSS 无卷影结果可识别' { Test-ShadowCopyNoneFound 'No items found that satisfy the query.' }
 $fullCandidates = @(Get-CleanupCandidates)
 $fullIds = @('windows-old', 'windows-upgrade-temp', 'restore-points')
 $fullReady = $true
