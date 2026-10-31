@@ -225,11 +225,11 @@ function Get-CleanupCandidates {
         @{ Id = 'thumbnail-cache'; Name = '缩略图 / 图标缓存'; Level = 'safe'; RequiresAdmin = $false; Kind = 'files'; Paths = @("$local\Microsoft\Windows\Explorer"); Patterns = @('thumbcache_*.db', 'iconcache_*.db'); Note = '资源管理器会重建，首次打开文件夹略慢' }
         @{ Id = 'recycle-bin'; Name = '回收站（C 盘）'; Level = 'safe'; RequiresAdmin = $false; Kind = 'recycle'; Paths = @(); OptIn = $true; Note = '不可恢复，需 -IncludeRecycleBin 显式开启' }
         @{ Id = 'browser-cache'; Name = '浏览器缓存 (Edge / Chrome)'; Level = 'safe'; RequiresAdmin = $false; Kind = 'tree-contents'; Paths = $browserPaths.ToArray(); OptIn = $true; Note = '覆盖 Default/Profile *；不清 Cookie/密码/历史，需 -IncludeBrowserCache' }
-        @{ Id = 'windows-upgrade-temp'; Name = 'Windows 升级临时文件 ($Windows.~BT / ~WS)'; Level = 'deep'; RequiresAdmin = $true; Kind = 'manual'; Paths = @("C:\`$Windows.~BT", "C:\`$Windows.~WS"); OptIn = $true; Note = '自动化已停用；请在确认升级完成后使用 Windows 存储/磁盘清理' }
-        @{ Id = 'windows-old'; Name = '旧系统备份 (Windows.old)'; Level = 'deep'; RequiresAdmin = $true; Kind = 'manual'; Paths = @("C:\Windows.old"); OptIn = $true; Note = '自动化已停用；请使用 Windows 存储/磁盘清理，删除后无法回退旧版本' }
+        @{ Id = 'windows-upgrade-temp'; Name = 'Windows 升级临时文件 ($Windows.~BT / ~WS)'; Level = 'deep'; RequiresAdmin = $true; Kind = 'manual'; FullKind = 'tree-remove'; Paths = @("C:\`$Windows.~BT", "C:\`$Windows.~WS"); OptIn = $true; Note = '普通模式仅手动；FullCleanup + AcceptRisk 且升级空闲时可由管理员清理' }
+        @{ Id = 'windows-old'; Name = '旧系统备份 (Windows.old)'; Level = 'deep'; RequiresAdmin = $true; Kind = 'manual'; FullKind = 'cleanmgr-old'; Paths = @("C:\Windows.old"); OptIn = $true; Note = '普通模式仅手动；FullCleanup + AcceptRisk 使用 Windows 官方磁盘清理通道' }
         @{ Id = 'hibernate'; Name = '休眠文件 (hiberfil.sys)'; Level = 'deep'; RequiresAdmin = $true; Kind = 'hibernate'; Paths = @("C:\hiberfil.sys"); OptIn = $true; Note = '关闭休眠可释放约等于内存大小的空间，会同时关闭快速启动' }
         @{ Id = 'winsxs-dism'; Name = '组件存储清理 (WinSxS / DISM)'; Level = 'deep'; RequiresAdmin = $true; Kind = 'dism'; Paths = @(); OptIn = $true; Note = '清理被取代的更新组件，通常 1-5 GB，耗时 5-20 分钟，需 -DismCleanup' }
-        @{ Id = 'restore-points'; Name = '系统还原点'; Level = 'deep'; RequiresAdmin = $true; Kind = 'manual'; Paths = @(); OptIn = $true; Note = '自动化删除已停用；VSS 卷影不等于还原点，请使用系统保护界面' }
+        @{ Id = 'restore-points'; Name = '系统还原点与卷影副本'; Level = 'deep'; RequiresAdmin = $true; Kind = 'manual'; FullKind = 'vss-all'; Paths = @(); OptIn = $true; Note = '普通模式仅手动；FullCleanup + AcceptRisk 会删除 C 盘全部 VSS 卷影，含备份/文件历史风险' }
         @{ Id = 'pagefile'; Name = '虚拟内存（分页文件）'; Level = 'deep'; RequiresAdmin = $true; Kind = 'pagefile'; Paths = @(); OptIn = $false; Note = '迁移到其他分区需重启，脚本只检测并给出手动步骤' }
     )
 
@@ -248,6 +248,7 @@ function Get-CleanupCandidates {
             Paths         = @(Get-UniquePaths $d.Paths)
             Patterns      = $patterns
             OptIn         = $optIn
+            FullKind      = if ($d.ContainsKey('FullKind')) { $d.FullKind } else { '' }
             Note          = $d.Note
             Exists        = $false
             Bytes         = [long]0
@@ -261,10 +262,21 @@ function Get-CleanupCandidates {
 
 function Update-CandidateSize {
     param([object]$Candidate)
-    if ($Candidate.Kind -in @('dism', 'manual')) {
+    if ($Candidate.Kind -eq 'dism') {
         # 属于系统能力，始终“存在”，体积无法预先统计
         $Candidate.Exists = $true
         $Candidate.Measured = $false
+        return $Candidate
+    }
+    if ($Candidate.Kind -eq 'manual') {
+        $paths = @(Get-UniquePaths $Candidate.Paths)
+        $stat = Get-PathStat -Paths $paths
+        if ($stat) {
+            $Candidate.Exists = $true
+            $Candidate.Bytes = $stat.Bytes
+            $Candidate.Files = $stat.Files
+        }
+        $Candidate.Measured = $true
         return $Candidate
     }
     if ($Candidate.Kind -eq 'pagefile') { return $Candidate }

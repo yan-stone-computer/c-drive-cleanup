@@ -135,6 +135,112 @@ function Invoke-ResetUpdateCache {
     }
 }
 
+function Test-WindowsSetupBusy {
+    $pendingPaths = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired',
+        'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\PendingFileRenameOperations'
+    )
+    foreach ($path in $pendingPaths) {
+        if (Test-PathSafe $path) { return $true }
+    }
+    foreach ($name in @('TiWorker', 'SetupHost', 'SetupPlatform')) {
+        if (@(Get-Process -Name $name -ErrorAction SilentlyContinue).Count -gt 0) { return $true }
+    }
+    return $false
+}
+
+function Invoke-RemoveUpgradeTemp {
+    if (-not (Test-IsAdmin)) {
+        return [pscustomobject]@{ Status = 'needs-admin'; Bytes = [long]0; Output = '需要管理员权限' }
+    }
+    if (Test-WindowsSetupBusy) {
+        return [pscustomobject]@{ Status = 'skipped'; Bytes = [long]0; Output = '检测到 Windows 安装、更新或待重启任务，已跳过升级临时目录' }
+    }
+    $targets = @('C:\$Windows.~BT', 'C:\$Windows.~WS')
+    $before = [long]0
+    $after = [long]0
+    foreach ($target in $targets) {
+        if (-not (Test-PathSafe $target)) { continue }
+        $st = Get-DirStat $target
+        if ($st) { $before += $st.Bytes }
+        try {
+            $null = Remove-TreeBestEffort -Path $target -SkipRecentHours 0 -AllowedRoots @($target)
+        } catch { }
+        if (Test-PathSafe $target) {
+            $st2 = Get-DirStat $target
+            if ($st2) { $after += $st2.Bytes }
+        }
+    }
+    $freed = [Math]::Max([long]0, $before - $after)
+    return [pscustomobject]@{
+        Status = if ($after -eq 0) { 'ok' } else { 'partial' }
+        Bytes  = $freed
+        Output = if ($after -eq 0) { "已清理升级临时文件，释放 $(Format-Size $freed)" } else { '部分升级临时文件仍被占用' }
+    }
+}
+
+function Invoke-CleanmgrPreviousInstallations {
+    param([int]$TimeoutMin = 60)
+    $target = 'C:\Windows.old'
+    if (-not (Test-IsAdmin)) {
+        return [pscustomobject]@{ Status = 'needs-admin'; Bytes = [long]0; Output = '需要管理员权限' }
+    }
+    if (-not (Test-PathSafe $target)) {
+        return [pscustomobject]@{ Status = 'missing'; Bytes = [long]0; Output = 'Windows.old 不存在' }
+    }
+    if (Test-WindowsSetupBusy) {
+        return [pscustomobject]@{ Status = 'skipped'; Bytes = [long]0; Output = '检测到 Windows 安装/回滚任务，已跳过 Windows.old' }
+    }
+    $before = [long]0
+    $st = Get-DirStat $target
+    if ($st) { $before = $st.Bytes }
+    $cleanmgr = Join-Path (Get-WindowsDir) 'System32\cleanmgr.exe'
+    $stateKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches\Previous Installations'
+    if (-not (Test-PathSafe $cleanmgr) -or -not (Test-PathSafe $stateKey)) {
+        return [pscustomobject]@{ Status = 'failed'; Bytes = [long]0; Output = 'Windows 磁盘清理组件不可用' }
+    }
+    $hadState = $false
+    $oldState = $null
+    try {
+        $prop = Get-ItemProperty -Path $stateKey -Name 'StateFlags0099' -ErrorAction SilentlyContinue
+        if ($null -ne $prop) { $hadState = $true; $oldState = $prop.StateFlags0099 }
+        New-ItemProperty -Path $stateKey -Name 'StateFlags0099' -Value 2 -PropertyType DWord -Force -ErrorAction Stop | Out-Null
+        $process = Start-Process -FilePath $cleanmgr -ArgumentList '/sagerun:99' -PassThru -WindowStyle Hidden -ErrorAction Stop
+        $exited = $process.WaitForExit($TimeoutMin * 60 * 1000)
+        if (-not $exited) {
+            return [pscustomobject]@{ Status = 'partial'; Bytes = [long]0; Output = "磁盘清理仍在运行（超过 $TimeoutMin 分钟）；未执行任何并发兜底删除" }
+        }
+        if (-not (Test-PathSafe $target)) {
+            return [pscustomobject]@{ Status = 'ok'; Bytes = $before; Output = 'Windows.old 已通过官方磁盘清理删除' }
+        }
+        return [pscustomobject]@{ Status = 'partial'; Bytes = [long]0; Output = '磁盘清理结束但 Windows.old 仍存在；请稍后通过系统存储设置重试' }
+    } catch {
+        return [pscustomobject]@{ Status = 'failed'; Bytes = [long]0; Output = $_.Exception.Message }
+    } finally {
+        try {
+            if ($hadState) {
+                New-ItemProperty -Path $stateKey -Name 'StateFlags0099' -Value $oldState -PropertyType DWord -Force | Out-Null
+            } else {
+                Remove-ItemProperty -Path $stateKey -Name 'StateFlags0099' -Force -ErrorAction SilentlyContinue
+            }
+        } catch { }
+    }
+}
+
+function Invoke-RemoveAllShadowCopies {
+    if (-not (Test-IsAdmin)) {
+        return [pscustomobject]@{ Status = 'needs-admin'; Bytes = [long]0; Output = '需要管理员权限' }
+    }
+    $vssadmin = Join-Path (Get-WindowsDir) 'System32\vssadmin.exe'
+    $r = Invoke-ProcessCapture -FilePath $vssadmin -Arguments @('delete', 'shadows', '/for=C:', '/all', '/quiet')
+    $ok = ($null -ne $r.ExitCode -and $r.ExitCode -eq 0)
+    return [pscustomobject]@{
+        Status = if ($ok) { 'ok' } else { 'failed' }
+        Bytes  = [long]0
+        Output = if ($ok) { '已删除 C 盘全部 VSS 卷影（AcceptRisk 已确认）' } else { $r.Output }
+    }
+}
+
 function Get-ElevationCommand {
     param([string]$ScriptPath, [string]$ExtraArgs = '')
     $argLine = '-NoProfile -ExecutionPolicy Bypass -File "' + $ScriptPath + '"'

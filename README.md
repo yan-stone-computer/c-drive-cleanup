@@ -11,7 +11,7 @@
 [![CI](https://github.com/yan-stone-computer/c-drive-cleanup/actions/workflows/test.yml/badge.svg)](https://github.com/yan-stone-computer/c-drive-cleanup/actions/workflows/test.yml)
 [![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white)](#适用环境)
 [![PowerShell 5.1+](https://img.shields.io/badge/PowerShell-5.1%2B-5391FE?logo=powershell&logoColor=white)](#适用环境)
-[![Tests](https://img.shields.io/badge/safety_tests-42%20passed-2ea44f)](#验证)
+[![Tests](https://img.shields.io/badge/safety_tests-46%20passed-2ea44f)](#验证)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/yan-stone-computer/c-drive-cleanup?style=social)](https://github.com/yan-stone-computer/c-drive-cleanup)
 
@@ -112,6 +112,30 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\scan.ps1
 | `-DismCleanup` | DISM 清理被取代组件 | 时间较长，不能中途强杀 |
 
 `-AllSafe` 已包含浏览器缓存和更新下载缓存；单独出现的这两个开关仍可用于精细控制。
+
+### 明确授权后的全清理
+
+只有在用户明确授权管理员权限、并要求清理不可逆系统数据并愿意承担后果时，才使用：
+
+```powershell
+# 先查看完整计划
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\clean.ps1 `
+  -FullCleanup -AcceptRisk
+
+# 真正执行
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\clean.ps1 `
+  -FullCleanup -AcceptRisk -Apply -Yes
+```
+
+`-FullCleanup` 必须与 `-AcceptRisk` 同时出现，并且需要管理员终端；UAC 仍由用户亲自确认。该模式会启用：
+
+- `-AllSafe`
+- 回收站、诊断日志、休眠、DISM、更新缓存
+- 升级临时目录
+- Windows 官方磁盘清理处理 `Windows.old`
+- C 盘全部 VSS 卷影清理
+
+它会删除最近 24 小时内的 Temp 文件，并可能永久丢失回收站、诊断证据、旧版本回退和备份卷影。聊天记录、用户文件夹、安装包和软件数据迁移仍不会自动执行。
 
 ## 软件存储地图
 
@@ -250,7 +274,7 @@ Windows.old、系统还原点、虚拟内存、用户文件夹和微信/QQ 数�
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\tests\test-lib.ps1
 ```
 
-当前覆盖 **42 项断言**，包括：
+当前覆盖 **46 项断言**，包括：
 
 - 盘符根、UNC、用户资料、系统目录拒绝
 - `TEMP/TMP` 环境变量污染
@@ -260,6 +284,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\tests\test-lib.ps1
 - junction/reparse 跳过
 - 不可逆自动化禁用
 - 软件存储 C 盘识别和迁移方案字段
+- `FullCleanup` 必须获得 `AcceptRisk` 的授权闸
 - PowerShell 语法与 JSON 基础结构
 
 GitHub Actions 会在 `windows-latest` 上运行同一套测试。

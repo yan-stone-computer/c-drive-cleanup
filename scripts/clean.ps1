@@ -3,6 +3,7 @@
   c-drive-cleanup 执行器
   默认只做试运行（dry-run）。加 -Apply 才真正删除；加 -Yes 跳过交互确认。
   安全项在 -Level safe 下执行；深度项（DISM/休眠/还原点/Windows.old）只在 -Level deep 下且需对应开关。
+  -FullCleanup 还要求 -AcceptRisk，并由用户自行确认 UAC。
 #>
 [CmdletBinding()]
 param(
@@ -18,8 +19,11 @@ param(
     [switch]$IncludeDiagnostics,
     [switch]$ResetUpdateCache,
     [switch]$AllSafe,
+    [switch]$FullCleanup,
+    [switch]$AcceptRisk,
     [switch]$DisableHibernate,
-    # 为兼容旧命令保留；这些不可逆自动化操作会被明确拒绝。
+    # 不可逆项仅在 -AcceptRisk 时允许。
+    [switch]$RemoveAllShadowCopies,
     [switch]$PruneRestorePoints,
     [switch]$RemoveWindowsOld,
     [switch]$RemoveWindowsUpgradeTemp,
@@ -40,16 +44,35 @@ $here = Split-Path -Parent $PSCommandPath
 
 # ------------------------------------------------------------ 参数安全闸
 
+if ($FullCleanup -and -not $AcceptRisk) {
+    Write-Host '拒绝执行：-FullCleanup 必须同时带 -AcceptRisk，确认已知晓不可逆数据丢失风险。' -ForegroundColor Red
+    exit 1
+}
+if ($FullCleanup) {
+    $Level = 'deep'
+    $AllSafe = $true
+    $IncludeRecycleBin = $true
+    $IncludeDiagnostics = $true
+    $ResetUpdateCache = $true
+    $DisableHibernate = $true
+    $RemoveAllShadowCopies = $true
+    $RemoveWindowsOld = $true
+    $RemoveWindowsUpgradeTemp = $true
+    $DismCleanup = $true
+    $CreateRestorePoint = $false # VSS 全删会连同刚创建的还原点一起删除
+    if (-not $PSBoundParameters.ContainsKey('SkipRecentHours')) { $SkipRecentHours = 0 }
+}
+
 if ($AllSafe) {
     # 只启用可在不破坏回退数据、不停止共享服务的前提下重建的缓存。
     $IncludeBrowserCache = $true
     $ResetUpdateCache = $true
 }
 
-$irreversibleAutomation = $PruneRestorePoints -or $RemoveWindowsOld -or $RemoveWindowsUpgradeTemp
-if ($irreversibleAutomation) {
-    Write-Host '拒绝执行：还原点、Windows.old 与 Windows 升级残留的自动删除已停用。' -ForegroundColor Red
-    Write-Host '这些操作会丢失系统回退能力或误伤非还原点卷影；请使用 Windows 存储/系统保护界面手动确认。'
+$irreversibleAutomation = $RemoveAllShadowCopies -or $PruneRestorePoints -or $RemoveWindowsOld -or $RemoveWindowsUpgradeTemp
+if ($irreversibleAutomation -and -not $AcceptRisk) {
+    Write-Host '拒绝执行：还原点/卷影、Windows.old 或 Windows 升级残留需要 -AcceptRisk。' -ForegroundColor Red
+    Write-Host '这些操作会丢失系统回退或备份数据。只有用户明确授权管理员权限并承担后果时才能继续。'
     exit 1
 }
 
@@ -101,11 +124,6 @@ foreach ($c in $candidates) {
     if ($c.Kind -in @('pagefile')) { continue } # 只做检测，清理留给手动步骤
     if ($c.Level -eq 'deep' -and $Level -ne 'deep') { continue }
     if ($c.Level -eq 'info') { continue }
-    if ($c.Kind -eq 'manual') {
-        $wanted.Add([pscustomobject]@{ Candidate = $c; SkipReason = 'needs-manual' })
-        continue
-    }
-
     # 可选项目必须显式开启
     if ($c.OptIn) {
         $enabled = switch ($c.Id) {
@@ -117,12 +135,19 @@ foreach ($c in $candidates) {
             'wu-download' { [bool]$ResetUpdateCache }
             'hibernate' { [bool]$DisableHibernate }
             'winsxs-dism' { [bool]$DismCleanup }
+            'windows-old' { [bool]($AcceptRisk -and $RemoveWindowsOld) }
+            'windows-upgrade-temp' { [bool]($AcceptRisk -and $RemoveWindowsUpgradeTemp) }
+            'restore-points' { [bool]($AcceptRisk -and ($RemoveAllShadowCopies -or $PruneRestorePoints)) }
             default { $false }
         }
         if (-not $enabled) {
             $wanted.Add([pscustomobject]@{ Candidate = $c; SkipReason = 'needs-flag' })
             continue
         }
+    }
+    if ($c.Kind -eq 'manual' -and -not $AcceptRisk) {
+        $wanted.Add([pscustomobject]@{ Candidate = $c; SkipReason = 'needs-manual' })
+        continue
     }
     if ($c.Id -eq 'wu-download' -and $SkipWuCache) {
         $wanted.Add([pscustomobject]@{ Candidate = $c; SkipReason = 'needs-flag' })
@@ -197,6 +222,12 @@ foreach ($p in $plan) {
     }
 }
 Write-Human ("预计可释放：约 {0}（{1} 项）" -f (Format-Size $plannedBytes), @($plan | Where-Object { -not $_.SkipReason }).Count) 'Green'
+if ($FullCleanup) {
+    Write-Human '风险模式：-FullCleanup + -AcceptRisk 已启用；将尝试不可逆系统清理，且 UAC 仍须由你确认。' 'Red'
+    if ($PSBoundParameters.ContainsKey('CreateRestorePoint')) {
+        Write-Human '  -CreateRestorePoint 已忽略：全清理会删除 C 盘全部 VSS 卷影。' 'Yellow'
+    }
+}
 
 # ------------------------------------------------------------ 深度前创建还原点
 
@@ -248,8 +279,9 @@ foreach ($p in $plan) {
         continue
     }
 
+    $effectiveKind = if ($AcceptRisk -and $c.FullKind) { $c.FullKind } else { $c.Kind }
     try {
-        switch ($c.Kind) {
+        switch ($effectiveKind) {
             'tree-contents' {
                 $skippedTotal = 0
                 $recentTotal = 0
@@ -364,6 +396,25 @@ foreach ($p in $plan) {
                 $detail = $r.Output
                 $status = if ($r.Status -eq 'ok') { 'ok' } else { 'partial' }
             }
+            'tree-remove' {
+                $r = Invoke-RemoveUpgradeTemp
+                $freed += [long]$r.Bytes
+                $detail = $r.Output
+                if ($r.Status -ne 'ok') { $status = 'partial' }
+            }
+            'cleanmgr-old' {
+                Write-Human '  正在调用 Windows 官方磁盘清理处理 Windows.old，请勿关闭窗口...' 'Yellow'
+                $r = Invoke-CleanmgrPreviousInstallations
+                $freed += [long]$r.Bytes
+                $detail = $r.Output
+                if ($r.Status -ne 'ok') { $status = 'partial' }
+            }
+            'vss-all' {
+                Write-Human '  正在删除 C 盘全部 VSS 卷影；此操作已由用户明确承担风险...' 'Red'
+                $r = Invoke-RemoveAllShadowCopies
+                $detail = $r.Output
+                if ($r.Status -ne 'ok') { $status = 'partial' }
+            }
             default {
                 $status = 'skipped'
                 $detail = '不支持的清理类型'
@@ -395,11 +446,13 @@ $actualDelta = [long]($freeAfter - $freeBefore)
 
 $summary = [pscustomobject]@{
     Schema = 'c-drive-cleanup-clean/1'
-    SafetyProfile = if ($AllSafe) { 'safe-v2+allsafe' } else { 'safe-v2' }
+    SafetyProfile = if ($FullCleanup) { 'safe-v2+full-risk' } elseif ($AllSafe) { 'safe-v2+allsafe' } else { 'safe-v2' }
     GeneratedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
     Level = $Level
     Applied = $doApply
     Elevated = $admin
+    FullCleanup = [bool]$FullCleanup
+    AcceptRisk = [bool]$AcceptRisk
     FreeBytesBefore = [long]$freeBefore
     FreeBytesAfter = [long]$freeAfter
     FreeSpaceDelta = $actualDelta
@@ -407,8 +460,11 @@ $summary = [pscustomobject]@{
     SkipRecentHours = $SkipRecentHours
     Results = $results.ToArray()
     ElevationHint = if (-not $admin -and @($results | Where-Object { $_.Status -eq 'needs-admin' }).Count -gt 0) {
-        # 只提权重跑“同等范围”；深清项默认不执行，需要用户按需追加开关
-        Get-ElevationCommand -ScriptPath (Join-Path $here 'clean.ps1') -ExtraArgs ('-Level ' + $Level + ' -Apply -Yes')
+        $rerunArgs = "-Level $Level -Apply -Yes"
+        if ($AllSafe) { $rerunArgs += ' -AllSafe' }
+        if ($FullCleanup) { $rerunArgs += ' -FullCleanup -AcceptRisk' }
+        if ($SkipRecentHours -ne 24) { $rerunArgs += " -SkipRecentHours $SkipRecentHours" }
+        Get-ElevationCommand -ScriptPath (Join-Path $here 'clean.ps1') -ExtraArgs $rerunArgs
     } else { '' }
 }
 

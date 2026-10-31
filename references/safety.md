@@ -10,6 +10,7 @@
 6. **不跟随链接**：最终路径或任一父目录是 junction/symlink 时跳过。
 7. **近期文件默认保留**：默认跳过最近 24 小时修改的文件。
 8. **不强行中断**：不停止 BITS/Windows Update，不强杀 DISM，不接管 ACL。
+9. **全清理双重授权**：`-FullCleanup` 必须同时有 `-AcceptRisk`；不能由代理自行假设用户同意。
 
 ## 风险分级
 
@@ -23,19 +24,19 @@
 | 回收站 | `-IncludeRecycleBin` | **不可恢复** |
 | 休眠文件 | `-DisableHibernate` | `powercfg -h on` 可恢复；快速启动同时关闭 |
 | DISM 组件清理 | `-DismCleanup` | 不可卸载被清理的旧更新；必须一次运行完成 |
-| 系统还原点 | 手动 | 删除后无法恢复；必须用“系统保护”界面 |
-| Windows.old / 升级残留 | 手动 | 删除后失去旧版本回退；必须用 Windows 存储或磁盘清理 |
+| 系统还原点 / VSS | 默认手动；`-FullCleanup -AcceptRisk` | 全清理会删除 C 盘全部卷影，可能损坏还原、文件历史和备份 |
+| Windows.old / 升级残留 | 默认手动；`-FullCleanup -AcceptRisk` | 删除后失去旧版本回退；Windows.old 仅走官方 cleanmgr |
 | 用户资料/应用聊天数据 | 手动 | 迁移，不删除；先备份 |
 
 ## 为什么不再自动删除“安全大目录”
 
 ### VSS 卷影副本
 
-`vssadmin delete shadows /oldest` 删除的是最早卷影，不保证那个卷影是系统还原点。它可能破坏文件历史、备份软件或服务器卷影链。因此本 skill 不再自动执行 VSS 删除，只读取 `Get-ComputerRestorePoint` 做展示。
+`vssadmin delete shadows /oldest` 删除的是最早卷影，不保证那个卷影是系统还原点。默认模式只读取 `Get-ComputerRestorePoint` 做展示。只有用户明确接受不可逆损失时，`-FullCleanup -AcceptRisk` 才会执行 `vssadmin delete shadows /for=C: /all /quiet`，并可能破坏系统还原、文件历史和第三方备份。
 
 ### Windows.old 与 `$Windows.~BT/~WS`
 
-直接 `takeown`/`icacls` 后递归删除会改变系统目录权限，并可能在磁盘清理仍在运行时并发删除。升级待重启或安装程序活动时，这些目录还可能是恢复路径。只允许通过 Windows 官方界面删除。
+直接 `takeown`/`icacls` 后递归删除会改变系统目录权限，并可能在磁盘清理仍在运行时并发删除。即使在全清理模式，`Windows.old` 也只调用 Windows 官方 `cleanmgr` 通道；超时或仍有残留时不会启动 ACL 接管兜底。升级临时目录在全清理模式且确认没有安装/待重启任务时才会处理。
 
 ### Windows Update 与 BITS
 
@@ -50,6 +51,14 @@
 - 用户 Temp、浏览器缓存、回收站、缩略图：普通权限。
 - Windows Temp、传递优化、更新缓存、WER/CBS、DISM、休眠：管理员。
 - 脚本不自行提权，也不模拟 UAC。需要时用户自行在管理员终端执行。
+
+## 全清理授权
+
+- 用户必须明确说授权管理员权限并承担不可逆后果。
+- 先运行 `-FullCleanup -AcceptRisk` dry-run 并由代理解释删除范围。
+- 真实执行使用 `-FullCleanup -AcceptRisk -Apply -Yes`。
+- UAC 由用户本人确认；代理不得模拟按钮。
+- 聊天记录、用户文件、安装包和软件数据迁移仍不自动处理。
 
 ## 回滚
 

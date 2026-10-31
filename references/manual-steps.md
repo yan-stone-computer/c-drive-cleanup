@@ -28,6 +28,45 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$Skill\scripts\clean.ps1" -
 
 `-AllSafe` 不包含回收站、诊断证据、休眠、系统还原点、Windows.old 或 DISM。
 
+## 用户明确授权后的全清理
+
+仅当用户同时满足以下条件时才可使用：
+
+1. 明确授权管理员权限。
+2. 明确知道回收站、诊断证据、旧 Windows 回退、VSS 备份/文件历史会永久丢失。
+3. 明确表示愿意承担这些后果。
+
+仍然必须由用户亲自确认 UAC；代理不得模拟点击。
+
+```powershell
+$Skill = Join-Path $env:USERPROFILE '.codex\skills\c-drive-cleanup'
+
+# 完整高风险计划，dry-run
+powershell -NoProfile -ExecutionPolicy Bypass -File "$Skill\scripts\clean.ps1" `
+  -FullCleanup -AcceptRisk
+
+# 用户已再次确认后执行
+powershell -NoProfile -ExecutionPolicy Bypass -File "$Skill\scripts\clean.ps1" `
+  -FullCleanup -AcceptRisk -Apply -Yes
+```
+
+`-FullCleanup` 会启用：
+
+- `-AllSafe`
+- 回收站和诊断日志
+- 休眠、DISM、Windows Update 缓存
+- Windows 升级临时目录
+- 通过 Windows 官方 `cleanmgr` 清理 `Windows.old`
+- 删除 C 盘全部 VSS 卷影
+- `SkipRecentHours = 0`
+
+特别注意：
+
+- 删除全部 VSS 卷影可能破坏系统还原、文件历史和第三方备份。
+- `Windows.old` 删除后无法回退旧 Windows；脚本不使用 `takeown` / `icacls` 兜底。
+- 最近 24 小时的 Temp 文件也会进入清理范围；仍被应用占用的文件会跳过。
+- 聊天记录、用户文件夹、安装包和软件数据迁移不会自动执行。
+
 ## 文件被占用：为什么不能强删
 
 ### 用户临时目录

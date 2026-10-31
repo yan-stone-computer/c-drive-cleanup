@@ -5,7 +5,7 @@ description: Use when the user wants to free space on the Windows C drive, diagn
 
 # C 盘安全清理（可执行 skill）
 
-目标是释放可重建缓存，而不是“看到大目录就删”。默认只读；真实删除必须同时带 `-Apply -Yes`。`-AllSafe` 启用除不可逆/改设置之外的可重建缓存；不可逆项只给官方界面步骤。
+目标是释放可重建缓存，而不是“看到大目录就删”。默认只读；真实删除必须同时带 `-Apply -Yes`。`-AllSafe` 启用除不可逆/改设置之外的可重建缓存。只有用户明确授权管理员权限、理解不可逆数据损失并愿意承担责任时，才可使用 `-FullCleanup -AcceptRisk`。
 
 只读体检还必须输出“C 盘软件存储地图”：已安装软件的已知安装目录、聊天/下载/模型/虚拟机数据、下载与桌面中的安装包，以及受保护的安装缓存。位于 C 盘的每项都要给出路径、风险和建议迁移/应用内修改方式。
 
@@ -15,8 +15,9 @@ description: Use when the user wants to free space on the Windows C drive, diagn
 - 临时文件只清理 Windows Known Folder `LocalAppData\Temp`，不信任可被进程改写的 `%TEMP%` / `%TMP%`。
 - 拒绝盘符根、UNC、用户桌面/文档/下载/图片/视频/音乐、系统关键目录，以及路径链中的 junction/symlink。
 - 默认保留最近 24 小时临时文件；被占用文件跳过，不强制结束进程。
-- 不自动停止 Windows Update/BITS，不强杀 DISM，不接管 ACL，不删除卷影副本。
-- 还原点、`Windows.old`、`$Windows.~BT/~WS`、用户资料和虚拟内存迁移只提供手动步骤。
+- 默认模式不停止 Windows Update/BITS，不强杀 DISM，不接管 ACL，不删除卷影副本。
+- 默认模式下，还原点、`Windows.old`、`$Windows.~BT/~WS`、用户资料和虚拟内存迁移只提供手动步骤。
+- 全清理模式仍不绕过 UAC；用户必须亲自确认提权提示。
 
 ## 工作流
 
@@ -43,6 +44,18 @@ $PS = 'powershell'   # PowerShell 7 可用 'pwsh'
 先报体检数字、风险级别、需要管理员或手动处理的项，再请求明确确认。用户拒绝或犹豫时，只交付体检与手动清单。
 
 当用户明确说“清理全部可安全清理的内容”时，使用 `-AllSafe`。它不包含回收站、诊断证据、休眠、DISM、还原点或 `Windows.old`。
+
+当且仅当用户明确说“授权管理员权限、承担全部责任、包括不可逆数据也清理”时，才能在管理员终端使用：
+
+```powershell
+# 先 dry-run 展示完整高风险计划
+& $PS -NoProfile -ExecutionPolicy Bypass -File "$Skill\scripts\clean.ps1" -FullCleanup -AcceptRisk
+
+# 用户再次确认后真实执行
+& $PS -NoProfile -ExecutionPolicy Bypass -File "$Skill\scripts\clean.ps1" -FullCleanup -AcceptRisk -Apply -Yes
+```
+
+`-FullCleanup` 缺少 `-AcceptRisk` 会直接拒绝。全清理会删除 C 盘全部 VSS 卷影、通过官方磁盘清理处理 `Windows.old`、清理升级临时目录、回收站、诊断证据、休眠、DISM 和更新缓存，并将 Temp 近期保护设为 0。用户资料、聊天记录、安装包和软件数据仍只报告迁移方案，不自动删除。
 
 ## 自动化等级
 
@@ -77,12 +90,13 @@ $PS = 'powershell'   # PowerShell 7 可用 'pwsh'
 | `-IncludeRecycleBin` | 清空 C 盘回收站 | **不可恢复** |
 | `-IncludeDiagnostics` | WER、CBS 日志、系统/应用崩溃转储 | 丢失排障证据；排障结束前不要用 |
 | `-ResetUpdateCache` | 删除 24 小时前的 Windows Update 下载缓存 | 不停止服务；更新待重启或存在活动 BITS 任务时跳过 |
+| `-RemoveAllShadowCopies` | 删除 C 盘全部 VSS 卷影 | **不可恢复**；需 `-AcceptRisk`，可能破坏文件历史/备份 |
 | `-DisableHibernate` | `powercfg -h off` | 关闭休眠与快速启动；可 `powercfg -h on` 恢复 |
 | `-DismCleanup` | DISM 清理被取代的组件 | 不能卸载已安装更新；不得中途强杀 |
 
 这些开关仍受 `-Level` 限制。`-Auto` 只能运行默认安全项，遇到任何显式开关或 deep 项会拒绝。
 
-### 仅手动，脚本明确拒绝自动化
+### 默认仅手动；全清理授权后执行
 
 - 系统还原点：VSS 卷影不等于还原点；请用“系统保护”界面。
 - `C:\Windows.old`：使用“设置 → 系统 → 存储 → 临时文件”或磁盘清理。
@@ -91,7 +105,9 @@ $PS = 'powershell'   # PowerShell 7 可用 'pwsh'
 - 微信/QQ 等聊天文件、用户文件夹：应用内改路径或“属性 → 位置 → 移动”。
 - 安装包文件：确认用途后移动到其他分区；安装缓存（`Windows\Installer`、`Package Cache`）不要直接删除。
 
-`-PruneRestorePoints`、`-RemoveWindowsOld`、`-RemoveWindowsUpgradeTemp` 仅为兼容旧命令而保留；传入后脚本会在任何清理动作前直接拒绝。
+`-PruneRestorePoints`（旧兼容别名，实际会删除全部卷影）、`-RemoveWindowsOld`、`-RemoveWindowsUpgradeTemp` 在默认模式下仍会在任何清理动作前直接拒绝。
+
+在 `-AcceptRisk` 存在时，上述三个兼容开关不再被默认闸拒绝；`-FullCleanup` 会自动启用它们。`Windows.old` 仍只调用官方 `cleanmgr` 通道，不做 `takeown` / `icacls` 或并发递归兜底；卷影使用 `vssadmin delete shadows /for=C: /all /quiet`，会删除备份/文件历史卷影。
 
 ## 参数
 
@@ -101,7 +117,8 @@ scan.ps1  [-Json] [-SkipSizes] [-OutFile <path>] [-TopApps N]
 clean.ps1 [-Level safe|deep] [-Apply] [-Yes] [-DryRun] [-Auto]
           [-Ids id1,id2] [-SkipIds id1]
           [-IncludeRecycleBin] [-IncludeBrowserCache] [-IncludeDiagnostics]
-          [-ResetUpdateCache] [-AllSafe] [-DisableHibernate] [-DismCleanup]
+          [-ResetUpdateCache] [-AllSafe] [-FullCleanup] [-AcceptRisk]
+          [-RemoveAllShadowCopies] [-DisableHibernate] [-DismCleanup]
           [-SkipWuCache] [-CreateRestorePoint]
           [-SkipRecentHours N] [-Json] [-LogDir <path>]
 
@@ -110,12 +127,15 @@ guide.ps1 [-OutFile <path>] [-TopApps N]
 
 - `-SkipRecentHours N`：默认 24；设为 0 才会考虑最近修改的文件，必须由用户明确要求。
 - `-AllSafe`：等价启用浏览器缓存和空闲状态下的更新缓存清理；不包含任何不可逆项。
+- `-FullCleanup`：明确授权后的完整系统清理；必须同时有 `-AcceptRisk`，并默认把 `-SkipRecentHours` 设为 0。
+- `-AcceptRisk`：确认接受回收站、诊断证据、旧版本回退、VSS 备份卷影等永久损失；不能由代理自行推断。
+- `-RemoveAllShadowCopies`：单独删除 C 盘全部 VSS 卷影；必须同时有 `-AcceptRisk`。
 - `-CreateRestorePoint`：管理员 deep 清理前尝试创建还原点；系统保护未开启时可能失败。
 - `-Json`：stdout 输出结构化结果，报告写入 `%LOCALAPPDATA%\c-drive-cleanup\reports`。
 
 ## 非管理员
 
-脚本不会自行提权或点击 UAC。需要管理员的项会返回 `needs-admin` 和一条由用户自行确认执行的 `Start-Process -Verb RunAs` 命令。
+脚本不会自行点击 UAC。普通权限下，安全用户项仍可执行，管理员项返回 `needs-admin`。用户明确授权后，可以运行报告给出的管理员命令，由用户亲自确认 UAC。
 
 ## 读报告
 
@@ -131,6 +151,8 @@ guide.ps1 [-OutFile <path>] [-TopApps N]
 
 清理报告包含每项 `Status`、`BytesFreed` 与 `FreeSpaceDelta`。文件未删除时会区分占用、权限、近期保留和其他错误。退出码：`0` 无异常；`2` 有跳过/部分完成/需手工；`1` 参数或致命错误。
 
+全清理报告包含 `FullCleanup` 和 `AcceptRisk` 字段；普通模式两者为 `false`。
+
 ## 不要做
 
 - 不要绕过脚本直接递归删除 `C:\Windows`、`WinSxS`、`Installer`、用户资料或未知大目录。
@@ -140,6 +162,8 @@ guide.ps1 [-OutFile <path>] [-TopApps N]
 - 不要在更新安装、待重启、DISM 运行中停止服务或杀进程。
 - 不要清理 Prefetch、`System Volume Information`、`ProgramData\Package Cache` 或应用聊天记录来“省空间”。
 - 不要承诺固定释放量。
+
+以上 `vssadmin`、`Windows.old` 限制只有在用户明确要求 `-FullCleanup -AcceptRisk` 时才可按脚本受控路径执行；普通模式仍禁止。
 
 ## 自检
 

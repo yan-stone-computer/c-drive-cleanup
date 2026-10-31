@@ -155,8 +155,8 @@ Check '还原点仅手动' { $byId['restore-points'].Kind -eq 'manual' }
 Check 'Windows.old 仅手动' { $byId['windows-old'].Kind -eq 'manual' }
 Check '升级残留仅手动' { $byId['windows-upgrade-temp'].Kind -eq 'manual' }
 $actionText = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $here '..\lib-actions.ps1')
-Check '不存在 VSS 删除命令' { $actionText -notmatch '(?i)vssadmin[^\r\n]*delete|Remove-ComputerRestorePoint' }
-Check '不存在 Windows.old 权限接管删除' { $actionText -notmatch '(?i)takeown|icacls|Previous Installations' }
+Check 'VSS 删除仅由 FullKind 控制' { $byId['restore-points'].FullKind -eq 'vss-all' -and $actionText -match '(?i)vssadmin[^\r\n]*delete' }
+Check 'Windows.old 不使用 ACL 权限接管' { $actionText -notmatch '(?i)takeown|icacls' }
 
 Write-Host 'Format-Size'
 Check 'GB 格式' { (Format-Size 5GB) -match 'GB' }
@@ -177,6 +177,34 @@ try {
 } finally {
     Remove-Item -LiteralPath $storageTest -Recurse -Force -ErrorAction SilentlyContinue
 }
+
+Write-Host '全清理授权闸'
+$cleanScript = Join-Path $here '..\clean.ps1'
+$fullWithoutRisk = & powershell -NoProfile -ExecutionPolicy Bypass -File $cleanScript -FullCleanup -DryRun 2>&1 | Out-String
+$fullWithoutRiskExit = $LASTEXITCODE
+Check 'FullCleanup 缺少 AcceptRisk 时拒绝' { $fullWithoutRiskExit -eq 1 -and $fullWithoutRisk -match 'AcceptRisk' }
+$shadowWithoutRisk = & powershell -NoProfile -ExecutionPolicy Bypass -File $cleanScript -Level deep -RemoveAllShadowCopies -DryRun 2>&1 | Out-String
+$shadowWithoutRiskExit = $LASTEXITCODE
+Check '卷影删除缺少 AcceptRisk 时拒绝' { $shadowWithoutRiskExit -eq 1 -and $shadowWithoutRisk -match 'AcceptRisk' }
+$fullPlanDir = Join-Path $env:TEMP ('c-drive-full-plan-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$fullPlanRaw = & powershell -NoProfile -ExecutionPolicy Bypass -File $cleanScript -FullCleanup -AcceptRisk -DryRun -Json -Ids user-temp -SkipRecentHours 24 -LogDir $fullPlanDir | Out-String
+$fullPlanExit = $LASTEXITCODE
+try {
+    $fullPlan = $fullPlanRaw | ConvertFrom-Json
+    Check 'FullCleanup 生成风险配置但不执行' { $fullPlanExit -eq 0 -and $fullPlan.SafetyProfile -eq 'safe-v2+full-risk' -and $fullPlan.Applied -eq $false }
+} catch {
+    Check 'FullCleanup 生成风险配置但不执行' { $false }
+} finally {
+    Remove-Item -LiteralPath $fullPlanDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+$fullCandidates = @(Get-CleanupCandidates)
+$fullIds = @('windows-old', 'windows-upgrade-temp', 'restore-points')
+$fullReady = $true
+foreach ($id in $fullIds) {
+    $candidate = $fullCandidates | Where-Object Id -eq $id | Select-Object -First 1
+    if (-not $candidate -or -not $candidate.FullKind) { $fullReady = $false }
+}
+Check '全清理系统项具有受控 FullKind' { $fullReady }
 
 Write-Host ''
 Write-Host ("通过 $pass 项，失败 $fail 项")

@@ -123,21 +123,21 @@ function Get-ManualGuidance([string]$Id) {
             return [pscustomobject]@{
                 Path = 'C:\Windows.old'
                 Reason = '删除后不能回退到上一版本 Windows，直接改 ACL/递归删除还有恢复风险。'
-                Action = '设置 → 系统 → 存储 → 临时文件 → “以前的 Windows 安装”；或磁盘清理 → 清理系统文件。'
+                Action = '默认使用设置/磁盘清理手动删除；用户明确授权 FullCleanup + AcceptRisk 时，管理员模式仅调用官方 cleanmgr。'
             }
         }
         'windows-upgrade-temp' {
             return [pscustomobject]@{
                 Path = 'C:\$Windows.~BT; C:\$Windows.~WS'
                 Reason = '升级安装或回滚可能仍在使用，自动递归删除不安全。'
-                Action = '确认升级完成或已取消后，使用 Windows 设置/磁盘清理中的临时文件。'
+                Action = '默认手动；只有明确授权 FullCleanup + AcceptRisk 且没有安装/待重启任务时才由管理员清理。'
             }
         }
         'restore-points' {
             return [pscustomobject]@{
                 Path = 'System Volume Information（由系统管理）'
                 Reason = 'VSS 卷影不等于系统还原点，vssadmin 删除 oldest 会误伤备份历史。'
-                Action = '系统属性 → 系统保护 → 配置；只通过官方界面删除还原点。'
+                Action = '默认通过系统保护界面手动删除；用户明确授权 FullCleanup + AcceptRisk 时会删除 C 盘全部 VSS 卷影。'
             }
         }
         'pagefile' {
@@ -229,6 +229,7 @@ Add-Line '2. **DISM / WinSxS**：先运行 `Dism.exe /Online /Cleanup-Image /Ana
 Add-Line '3. **休眠**：`C:\hiberfil.sys` 由 `powercfg -h off` 管理；会关闭快速启动。'
 Add-Line '4. **还原点**：系统属性 → 系统保护 → 配置；不要用 `vssadmin delete shadows`。'
 Add-Line '5. **Windows.old / 升级残留**：设置 → 系统 → 存储 → 临时文件，或磁盘清理 → 清理系统文件。'
+Add-Line '6. **明确授权的全清理**：`-FullCleanup -AcceptRisk -Apply -Yes`；会包含不可逆系统项，UAC 仍由用户确认。'
 Add-Line ''
 
 Add-Line '## 五、软件额外存储检测（仅在 C 盘时告警）'
