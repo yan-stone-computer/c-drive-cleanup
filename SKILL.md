@@ -19,7 +19,7 @@ description: Use when the user wants to free space on the Windows C drive, diagn
 ## 工作流
 
 ```powershell
-$Skill = Join-Path $env:USERPROFILE '.agents\skills\c-drive-cleanup'
+$Skill = Join-Path $env:USERPROFILE '.codex\skills\c-drive-cleanup'
 $PS = 'powershell'   # PowerShell 7 可用 'pwsh'
 
 # 1. 只读体检
