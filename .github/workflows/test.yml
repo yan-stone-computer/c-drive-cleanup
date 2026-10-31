@@ -66,7 +66,7 @@ jobs:
           & powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\guide.ps1 -OutFile $out -TopApps 1
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $out)) { throw 'guide.ps1 failed' }
           $text = Get-Content -Raw -Encoding UTF8 -LiteralPath $out
-          if ($text -notmatch '最近一次清理未完成' -or $text -notmatch '手动操作') { throw 'manual guidance missing' }
+          if ($text -notmatch 'manual-steps\.md' -or $text -notmatch '\-AllSafe') { throw 'manual guidance missing' }
 
       - name: Validate skill metadata
         shell: powershell
