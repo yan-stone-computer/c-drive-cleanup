@@ -231,7 +231,23 @@ Add-Line '4. **还原点**：系统属性 → 系统保护 → 配置；不要�
 Add-Line '5. **Windows.old / 升级残留**：设置 → 系统 → 存储 → 临时文件，或磁盘清理 → 清理系统文件。'
 Add-Line ''
 
-Add-Line '## 五、只能迁移或人工确认'
+Add-Line '## 五、软件额外存储检测（仅在 C 盘时告警）'
+Add-Line ''
+$cStorage = @($audit.StorageOnC | Sort-Object Bytes -Descending)
+if ($cStorage.Count -eq 0) {
+    Add-Line '未检测到可验证的 C 盘软件安装目录、聊天数据或安装包。'
+} else {
+    Add-Line '| 软件 / 数据 | 体积 | 类型 | 路径 | 风险 | 修改方案 |'
+    Add-Line '| --- | ---: | --- | --- | --- | --- |'
+    foreach ($s in $cStorage) {
+        Add-Line ('| ' + $s.Name + ' | ' + (Format-Size $s.Bytes) + ' | `' + $s.Kind + '` | `' + $s.Path + '` | ' + $s.Risk + ' | ' + $s.Action + ' |')
+    }
+    Add-Line ''
+    Add-Line '> 注册表没有 `InstallLocation` 的软件无法可靠判断安装路径；这里只报告已验证存在的路径。安装包检测范围是下载和桌面目录，不会自动删除。'
+}
+Add-Line ''
+
+Add-Line '## 六、只能迁移或人工确认'
 Add-Line ''
 Add-Line '1. **用户文件夹**：桌面/文档/下载/图片/视频/音乐 → 属性 → 位置 → 移动；不要删除唯一副本。'
 Add-Line '2. **虚拟内存**：设置 → 系统 → 系统信息 → 高级系统设置 → 性能设置 → 高级 → 虚拟内存；迁移后重启。'
@@ -240,28 +256,23 @@ if ($audit.Pagefile -and @($audit.Pagefile.Entries).Count -gt 0) {
         Add-Line ('   - 当前分页文件：' + $p.Name + '，' + $p.AllocatedMB + ' MB')
     }
 }
-Add-Line '3. **应用数据**：微信/QQ/企业微信/钉钉等在各应用设置内迁移，不要直接删除聊天记录目录。'
-foreach ($a in @($audit.AppCaches)) {
-    Add-Line ('   - 检测到 ' + $a.Name + '：' + (Format-Size $a.Bytes) + '；' + ($a.Paths -join '；'))
-}
-Add-Line '4. **开发者缓存**：npm/pnpm/pip/NuGet 可按需清理，离线环境或计量网络下不要清。'
-Add-Line '5. **Shader / DirectX 缓存**：可重建，但清理后可能短暂卡顿，不建议常规自动处理。'
+Add-Line '3. **开发者缓存**：npm/pnpm/pip/NuGet 可按需清理，离线环境或计量网络下不要清。'
 if ($audit.StorageSense) {
     $ss = $audit.StorageSense
-    Add-Line ('6. **存储感知**：当前' + $(if ($ss.Enabled) { '已开启' } else { '未开启' }) + '；设置 → 系统 → 存储 → 存储感知。')
+    Add-Line ('4. **存储感知**：当前' + $(if ($ss.Enabled) { '已开启' } else { '未开启' }) + '；设置 → 系统 → 存储 → 存储感知。')
 }
 Add-Line ''
 
-Add-Line '## 六、体积参考'
+Add-Line '## 七、体积参考'
 Add-Line ''
-Add-Line '| 项目 | 体积 |'
-Add-Line '| --- | ---: |'
+Add-Line '| 项目 | 体积 | 安装位置 |'
+Add-Line '| --- | ---: | --- |'
 foreach ($u in @($audit.UserFolders)) {
-    Add-Line ('| 用户文件夹 · ' + $u.Name + ' | ' + (Format-Size $u.Bytes) + ' |')
+    Add-Line ('| 用户文件夹 · ' + $u.Name + ' | ' + (Format-Size $u.Bytes) + ' | `' + $u.Path + '` |')
 }
 if ($audit.TopApps.Count -gt 0) {
     foreach ($a in $audit.TopApps) {
-        Add-Line ('| 已安装 · ' + $a.Name + ' | ' + (Format-Size $a.Bytes) + ' |')
+        Add-Line ('| 已安装 · ' + $a.Name + ' | ' + (Format-Size $a.Bytes) + ' | `' + $a.InstallLocation + '` |')
     }
 }
 Add-Line ''

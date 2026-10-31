@@ -419,14 +419,23 @@ function Get-UserFolderInfo {
 
 function Get-AppCacheInfo {
     $local = Get-LocalAppDataDir
+    $roaming = [Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)
     $profile = Get-UserProfileDir
     $candidates = @(
-        @{ Name = '微信（旧版）'; Paths = @("$profile\Documents\WeChat Files") }
-        @{ Name = '微信 4.x'; Paths = @("$profile\Documents\xwechat_files") }
-        @{ Name = 'QQ'; Paths = @("$profile\Documents\Tencent Files", "$local\Tencent\QQ") }
-        @{ Name = '企业微信'; Paths = @("$profile\Documents\WXWork") }
-        @{ Name = '钉钉'; Paths = @("$profile\Documents\DingTalk") }
-        @{ Name = '网易云音乐'; Paths = @("$local\Netease\CloudMusic", "$profile\Music\CloudMusic") }
+        @{ Name = '微信（旧版）聊天文件'; Kind = 'chat-data'; Risk = 'high'; Optional = $false; Paths = @("$profile\Documents\WeChat Files"); Action = '微信设置 → 文件管理 → 更改存储位置到其他分区；迁移完成后再处理旧目录。' }
+        @{ Name = '微信 4.x 聊天文件'; Kind = 'chat-data'; Risk = 'high'; Optional = $false; Paths = @("$profile\Documents\xwechat_files"); Action = '微信设置 → 文件管理 → 更改存储位置到其他分区；不要直接删除聊天目录。' }
+        @{ Name = 'QQ 聊天文件'; Kind = 'chat-data'; Risk = 'high'; Optional = $false; Paths = @("$profile\Documents\Tencent Files", "$local\Tencent\QQ"); Action = 'QQ 设置 → 基本设置 → 文件管理 → 更改目录到其他分区。' }
+        @{ Name = '企业微信聊天文件'; Kind = 'chat-data'; Risk = 'high'; Optional = $false; Paths = @("$profile\Documents\WXWork"); Action = '企业微信设置 → 通用 → 文件存储位置 → 更改到其他分区。' }
+        @{ Name = '钉钉聊天文件'; Kind = 'chat-data'; Risk = 'high'; Optional = $false; Paths = @("$profile\Documents\DingTalk"); Action = '钉钉设置 → 通用 → 文件存储位置 → 更改到其他分区。' }
+        @{ Name = '飞书 / Lark 数据'; Kind = 'chat-data'; Risk = 'high'; Optional = $false; Paths = @("$local\Feishu", "$roaming\Feishu", "$local\Lark", "$roaming\Lark"); Action = '飞书设置 → 通用 → 文件存储位置 → 更改目录；验证历史文件后再处理旧目录。' }
+        @{ Name = 'Telegram Desktop 数据'; Kind = 'chat-data'; Risk = 'high'; Optional = $false; Paths = @("$roaming\Telegram Desktop"); Action = 'Telegram Desktop 设置中更改下载/数据目录；不支持时按应用官方迁移方式处理 tdata。' }
+        @{ Name = 'Discord 应用数据'; Kind = 'app-data'; Risk = 'medium'; Optional = $false; Paths = @("$roaming\discord", "$local\Discord"); Action = '在应用内清理缓存；不要整体删除账号数据，必要时卸载后重装到其他分区。' }
+        @{ Name = 'Slack 应用数据'; Kind = 'app-data'; Risk = 'medium'; Optional = $false; Paths = @("$roaming\Slack"); Action = 'Slack 设置中清理缓存；不要直接删除工作区状态目录。' }
+        @{ Name = 'Microsoft Teams 数据'; Kind = 'app-data'; Risk = 'medium'; Optional = $false; Paths = @("$roaming\Microsoft\Teams", "$local\Packages\MSTeams_8wekyb3d8bbwe"); Action = 'Teams 设置中清理缓存；重装时可选择其他安装位置。' }
+        @{ Name = 'Zoom 录制与数据'; Kind = 'app-data'; Risk = 'high'; Optional = $false; Paths = @("$roaming\Zoom", "$profile\Documents\Zoom"); Action = 'Zoom 设置 → 录制 → 更改录制文件位置到其他分区。' }
+        @{ Name = 'Outlook 本地数据'; Kind = 'app-data'; Risk = 'high'; Optional = $false; Paths = @("$local\Microsoft\Outlook"); Action = 'Outlook 帐户设置 → 数据文件 → 更改 OST/PST 所在位置；不要直接移动正在使用的文件。' }
+        @{ Name = 'Adobe 媒体缓存'; Kind = 'app-cache'; Risk = 'medium'; Optional = $true; Paths = @("$roaming\Adobe\Common\Media Cache", "$roaming\Adobe\Common\Media Cache Files"); Action = '在 Adobe 应用首选项 → 媒体缓存中更改目录并清理。' }
+        @{ Name = '网易云音乐下载与缓存'; Kind = 'app-data'; Risk = 'medium'; Optional = $false; Paths = @("$local\Netease\CloudMusic", "$profile\Music\CloudMusic"); Action = '网易云音乐设置 → 下载设置 → 更改下载/缓存目录到其他分区。' }
     )
     $result = New-Object System.Collections.Generic.List[object]
     foreach ($c in $candidates) {
@@ -439,34 +448,198 @@ function Get-AppCacheInfo {
                 Name = $c.Name
                 Paths = @($existing)
                 Bytes = $bytes
+                Kind = $c.Kind
+                Risk = $c.Risk
+                Optional = [bool]$c.Optional
+                Action = $c.Action
             })
     }
     return $result.ToArray()
 }
 
-function Get-TopApps {
-    param([int]$Top = 8)
+function Test-IsCPath {
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+    try {
+        $full = [IO.Path]::GetFullPath($Path)
+        return ([IO.Path]::GetPathRoot($full) -ieq 'C:\')
+    } catch {
+        return $false
+    }
+}
+
+function New-StorageLocationRecord {
+    param(
+        [string]$Name,
+        [string]$Kind,
+        [string]$Path,
+        [long]$Bytes = -1,
+        [string]$Risk = 'medium',
+        [string]$Action = '',
+        [switch]$SkipSizes
+    )
+    if (-not (Test-PathSafe $Path)) { return $null }
+    $full = [IO.Path]::GetFullPath($Path)
+    if ($Bytes -lt 0 -and -not $SkipSizes) {
+        $stat = Get-PathStat -Paths @($full)
+        $Bytes = if ($stat) { [long]$stat.Bytes } else { [long]0 }
+    } elseif ($Bytes -lt 0) {
+        $Bytes = [long]0
+    }
+    return [pscustomobject]@{
+        Name    = $Name
+        Kind    = $Kind
+        Path    = $full
+        Bytes   = [long]$Bytes
+        OnC     = Test-IsCPath $full
+        Risk    = $Risk
+        Action  = $Action
+    }
+}
+
+function Get-InstalledApps {
+    param([long]$MinKB = 0)
     $keys = @(
         'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
         'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
         'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
     )
-    $apps = @()
+    $byKey = @{}
     foreach ($k in $keys) {
         $props = @()
         try { $props = @(Get-ItemProperty -Path $k -ErrorAction SilentlyContinue) } catch { $props = @() }
         foreach ($p in $props) {
             if (-not $p.PSObject.Properties['DisplayName']) { continue }
-            if (-not $p.PSObject.Properties['EstimatedSize']) { continue }
-            $kb = [long]0
-            try { $kb = [long]$p.EstimatedSize } catch { continue }
-            # 注册表 EstimatedSize 单位是 KB；过滤明显异常值（<10MB 或 >500GB）
-            if ($kb -lt 10240 -or $kb -gt 524288000) { continue }
-            $name = [string]$p.DisplayName
+            $name = ([string]$p.DisplayName).Trim()
             if (-not $name) { continue }
-            $apps += [pscustomobject]@{ Name = $name; KB = $kb }
+            $kb = [long]0
+            if ($p.PSObject.Properties['EstimatedSize']) {
+                try { $kb = [long]$p.EstimatedSize } catch { $kb = 0 }
+            }
+            if ($kb -gt 524288000) { $kb = 0 }
+            if ($MinKB -gt 0 -and $kb -lt $MinKB) { continue }
+            $location = ''
+            if ($p.PSObject.Properties['InstallLocation']) {
+                $location = ([string]$p.InstallLocation).Trim().Trim('"')
+            }
+        $key = ($name + '|' + $location).ToLowerInvariant()
+            $record = [pscustomobject]@{
+                Name            = $name
+                KB              = $kb
+                Bytes           = [long]($kb * 1KB)
+                InstallLocation = $location
+                Publisher       = if ($p.PSObject.Properties['Publisher']) { [string]$p.Publisher } else { '' }
+            }
+            if (-not $byKey.ContainsKey($key) -or $record.Bytes -gt $byKey[$key].Bytes) {
+                $byKey[$key] = $record
+            }
         }
     }
+    return @($byKey.Values | Sort-Object Bytes -Descending)
+}
+
+function Get-SoftwareStorageInfo {
+    param([switch]$SkipSizes)
+    $records = New-Object System.Collections.Generic.List[object]
+    $seen = @{}
+    function Add-StorageRecord([string]$Name, [string]$Kind, [string]$Path, [long]$Bytes = -1, [string]$Risk = 'medium', [string]$Action = '', [switch]$SkipSizes) {
+        $record = New-StorageLocationRecord -Name $Name -Kind $Kind -Path $Path -Bytes $Bytes -Risk $Risk -Action $Action -SkipSizes:$SkipSizes
+        if (-not $record) { return }
+        $key = $record.Path.ToLowerInvariant() + '|' + $record.Kind
+        if ($seen.ContainsKey($key)) { return }
+        $seen[$key] = $true
+        $records.Add($record)
+    }
+
+    foreach ($app in @(Get-AppCacheInfo)) {
+        foreach ($path in @($app.Paths)) {
+            Add-StorageRecord -Name $app.Name -Kind $app.Kind -Path $path -Risk $app.Risk -Action $app.Action -SkipSizes:$SkipSizes
+        }
+    }
+
+    foreach ($app in @(Get-InstalledApps)) {
+        if (-not $app.InstallLocation) { continue }
+        Add-StorageRecord -Name $app.Name -Kind 'installed-app' -Path $app.InstallLocation -Bytes $app.Bytes -Risk 'medium' -Action '不要直接移动应用安装目录。不需要时通过系统卸载；支持选择安装位置的应用，卸载后重装到其他分区。'
+    }
+
+    $profile = Get-UserProfileDir
+    $installerExtensions = @('.exe', '.msi', '.msix', '.msixbundle', '.appx', '.appxbundle', '.iso', '.img')
+    $installerRoots = @(
+        @{ Path = (Join-Path $profile 'Downloads'); Recurse = $true }
+        @{ Path = (Join-Path $profile 'Desktop'); Recurse = $false }
+    )
+    foreach ($root in $installerRoots) {
+        $dir = $root.Path
+        if (-not (Test-PathSafe $dir)) { continue }
+        $files = if ($root.Recurse) {
+            @(Get-ChildItem -LiteralPath $dir -Recurse -File -Force -ErrorAction SilentlyContinue)
+        } else {
+            @(Get-ChildItem -LiteralPath $dir -File -Force -ErrorAction SilentlyContinue)
+        }
+        foreach ($file in $files) {
+            if ($file.Extension.ToLowerInvariant() -notin $installerExtensions) { continue }
+            Add-StorageRecord -Name ('可能的安装包或便携程序：' + $file.Name) -Kind 'installer-file' -Path $file.FullName -Bytes ([long]$file.Length) -Risk 'low' -Action '确认是安装包或已不需要的便携程序后，把文件移动到其他分区或删除；本工具不会自动删除。'
+        }
+    }
+
+    $win = Get-WindowsDir
+    $programData = Get-ProgramDataDir
+    Add-StorageRecord -Name 'Windows Installer 缓存' -Kind 'protected-installer-cache' -Path (Join-Path $win 'Installer') -Risk 'critical' -Action '不要删除。它用于 MSI 修复、更新和卸载；删除可能导致软件无法修复。' -SkipSizes:$SkipSizes
+    Add-StorageRecord -Name 'Visual Studio / 系统安装包缓存' -Kind 'protected-installer-cache' -Path (Join-Path $programData 'Package Cache') -Risk 'critical' -Action '不要手动删除。使用对应安装器的修复/清理功能；集成开发环境数据可在安装器中迁移。' -SkipSizes:$SkipSizes
+    Add-StorageRecord -Name 'Windows 组件存储' -Kind 'protected-system-store' -Path (Join-Path $win 'WinSxS') -Risk 'critical' -Action '禁止手删；使用管理员 DISM 分析后再清理。' -SkipSizes:$SkipSizes
+
+    $local = Get-LocalAppDataDir
+    Add-StorageRecord -Name 'Ollama 模型' -Kind 'model-data' -Path (Join-Path $profile '.ollama\models') -Risk 'medium' -Action '通过设置 OLLAMA_MODELS 指向其他分区并迁移模型目录。' -SkipSizes:$SkipSizes
+    Add-StorageRecord -Name 'Docker Desktop WSL 数据' -Kind 'vm-data' -Path (Join-Path $local 'Docker\wsl') -Risk 'high' -Action '先停止 Docker，使用 Docker Desktop/WSL 官方搬迁或导出导入；不要直接移动 VHDX。' -SkipSizes:$SkipSizes
+    Add-StorageRecord -Name 'DirectX 着色器缓存' -Kind 'rebuildable-cache' -Path (Join-Path $local 'D3DSCache') -Risk 'low' -Action '可重建但游戏可能短暂卡顿；不作为常规自动删除项。' -SkipSizes:$SkipSizes
+    Add-StorageRecord -Name 'NVIDIA DirectX 缓存' -Kind 'rebuildable-cache' -Path (Join-Path $local 'NVIDIA\DXCache') -Risk 'low' -Action '通过 NVIDIA 控制面板或驱动工具清理；可重建。' -SkipSizes:$SkipSizes
+    Add-StorageRecord -Name 'AMD DirectX 缓存' -Kind 'rebuildable-cache' -Path (Join-Path $local 'AMD\DxCache') -Risk 'low' -Action '通过 AMD 软件清理；可重建。' -SkipSizes:$SkipSizes
+
+    try {
+        $steam = Get-ItemProperty -Path 'HKCU:\Software\Valve\Steam' -Name SteamPath -ErrorAction Stop
+        $steamRoot = [string]$steam.SteamPath
+        if ($steamRoot) {
+            $vdf = Join-Path $steamRoot 'steamapps\libraryfolders.vdf'
+            if (Test-PathSafe $vdf) {
+                $text = Get-Content -Raw -LiteralPath $vdf -ErrorAction SilentlyContinue
+                foreach ($m in [regex]::Matches($text, '(?im)^\s*"path"\s+"([^"]+)"')) {
+                    $library = $m.Groups[1].Value.Replace('\\', '\')
+                    Add-StorageRecord -Name 'Steam 游戏库' -Kind 'game-library' -Path $library -Risk 'medium' -Action 'Steam → 设置 → 存储 → 将游戏移动到其他库；不要直接移动 steamapps。' -SkipSizes:$SkipSizes
+                }
+            }
+        }
+    } catch { }
+
+    $epicManifest = Join-Path $programData 'Epic\EpicGamesLauncher\Data\Manifests'
+    if (Test-PathSafe $epicManifest) {
+        foreach ($manifest in @(Get-ChildItem -LiteralPath $epicManifest -Filter *.item -File -ErrorAction SilentlyContinue)) {
+            try {
+                $item = Get-Content -Raw -LiteralPath $manifest.FullName | ConvertFrom-Json
+                if ($item.InstallLocation) {
+                    Add-StorageRecord -Name ('Epic 游戏：' + $item.DisplayName) -Kind 'game-install' -Path $item.InstallLocation -Risk 'medium' -Action 'Epic Games Launcher → 设置 → 管理游戏；使用官方移动功能迁到其他分区。' -SkipSizes:$SkipSizes
+                }
+            } catch { }
+        }
+    }
+
+    try {
+        $wslRoot = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss'
+        if (Test-PathSafe $wslRoot) {
+            foreach ($key in @(Get-ChildItem -Path $wslRoot -ErrorAction SilentlyContinue)) {
+                $props = Get-ItemProperty -Path $key.PSPath -ErrorAction SilentlyContinue
+                if ($props.BasePath) {
+                    Add-StorageRecord -Name ('WSL：' + $(if ($props.DistributionName) { $props.DistributionName } else { $key.PSChildName })) -Kind 'vm-data' -Path $props.BasePath -Risk 'high' -Action '使用 wsl --export / --import 迁到其他分区；先备份并停止该发行版。' -SkipSizes:$SkipSizes
+                }
+            }
+        }
+    } catch { }
+
+    return @($records | Sort-Object -Property @{ Expression = 'OnC'; Descending = $true }, @{ Expression = 'Bytes'; Descending = $true })
+}
+
+function Get-TopApps {
+    param([int]$Top = 8)
+    $apps = @(Get-InstalledApps -MinKB 10240)
     if ($apps.Count -eq 0) { return @() }
     $seen = @{}
     $result = New-Object System.Collections.Generic.List[object]
@@ -476,6 +649,7 @@ function Get-TopApps {
         $result.Add([pscustomobject]@{
                 Name = $a.Name
                 Bytes = [long]($a.KB * 1KB)
+                InstallLocation = $a.InstallLocation
             })
         if ($result.Count -ge $Top) { break }
     }

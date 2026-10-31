@@ -163,6 +163,21 @@ Check 'GB 格式' { (Format-Size 5GB) -match 'GB' }
 Check 'MB 格式' { (Format-Size 5MB) -match 'MB' }
 Check '0 字节' { (Format-Size 0) -eq '0 B' }
 
+Write-Host '软件存储路径'
+$storageTest = Join-Path $env:TEMP ('c-drive-storage-test-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+New-Item -ItemType Directory -Path $storageTest -Force | Out-Null
+Set-Content -LiteralPath (Join-Path $storageTest 'data.bin') -Value ('x' * 32) -NoNewline
+try {
+    $storageRecord = New-StorageLocationRecord -Name '测试应用数据' -Kind 'app-data' -Path $storageTest -Risk 'high' -Action '移动到其他分区'
+    Check 'C 盘路径识别' { Test-IsCPath $env:TEMP }
+    Check 'D 盘路径不误判为 C 盘' { -not (Test-IsCPath 'D:\Apps') }
+    Check '软件存储记录包含路径和迁移方案' {
+        $storageRecord -and $storageRecord.OnC -and $storageRecord.Bytes -ge 32 -and $storageRecord.Action -eq '移动到其他分区'
+    }
+} finally {
+    Remove-Item -LiteralPath $storageTest -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 Write-Host ''
 Write-Host ("通过 $pass 项，失败 $fail 项")
 if ($fail -gt 0) { exit 1 } else { exit 0 }

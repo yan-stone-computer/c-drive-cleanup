@@ -1,11 +1,13 @@
 ---
 name: c-drive-cleanup
-description: Use when the user wants to free space on the Windows C drive, diagnose a full or near-full system disk, or safely clean temporary files, update/download caches, diagnostics, browser caches, hibernation, or component-store data. Chinese triggers include C盘清理、C盘爆满、C盘空间不足、磁盘满了、清理垃圾、释放空间、清理临时文件. Always audit read-only first, require explicit approval before any deletion, and never automate irreversible system rollback data removal.
+description: Use when the user wants to free space on the Windows C drive, diagnose a full or near-full system disk, locate C-drive software install/data/chat/installer storage, or safely clean temporary files, update/download caches, diagnostics, browser caches, hibernation, or component-store data. Chinese triggers include C盘清理、C盘爆满、C盘空间不足、磁盘满了、清理垃圾、释放空间、清理临时文件、软件装在C盘、聊天文件、安装包. Always audit read-only first, require explicit approval before any deletion, and never automate irreversible system rollback data removal.
 ---
 
 # C 盘安全清理（可执行 skill）
 
 目标是释放可重建缓存，而不是“看到大目录就删”。默认只读；真实删除必须同时带 `-Apply -Yes`。`-AllSafe` 启用除不可逆/改设置之外的可重建缓存；不可逆项只给官方界面步骤。
+
+只读体检还必须输出“C 盘软件存储地图”：已安装软件的已知安装目录、聊天/下载/模型/虚拟机数据、下载与桌面中的安装包，以及受保护的安装缓存。位于 C 盘的每项都要给出路径、风险和建议迁移/应用内修改方式。
 
 ## 安全边界
 
@@ -55,6 +57,18 @@ $PS = 'powershell'   # PowerShell 7 可用 'pwsh'
 
 `-AllSafe` 仍遵守“保留最近 24 小时文件”和“被占用就跳过”，不是强制删除。
 
+### 软件额外存储
+
+体检会检查：
+
+- 注册表 `InstallLocation` 可验证的已安装软件。
+- 微信、QQ、企业微信、钉钉、飞书、Telegram、Discord、Slack、Teams、Zoom、Outlook 等常见数据目录。
+- `Downloads` / `Desktop` 中的 `.exe`、`.msi`、`.msix`、`.appx`、`.iso`、`.img` 等安装包或便携程序。
+- Ollama 模型、Docker/WSL 数据、Steam/Epic 游戏库、DirectX shader cache。
+- `C:\Windows\Installer`、`ProgramData\Package Cache`、`WinSxS` 等受保护安装/系统缓存。
+
+注册表缺少 `InstallLocation` 的软件无法可靠判断安装目录，必须明确标为未知，不能猜测后建议删除。安装包和聊天文件只报告、不自动删除。
+
 ### 必须显式开关
 
 | 开关 | 作用 | 代价 |
@@ -75,6 +89,7 @@ $PS = 'powershell'   # PowerShell 7 可用 'pwsh'
 - `C:\$Windows.~BT` / `$Windows.~WS`：确认升级完成/取消后，用 Windows 官方清理界面。
 - 虚拟内存迁移：改系统设置并重启。
 - 微信/QQ 等聊天文件、用户文件夹：应用内改路径或“属性 → 位置 → 移动”。
+- 安装包文件：确认用途后移动到其他分区；安装缓存（`Windows\Installer`、`Package Cache`）不要直接删除。
 
 `-PruneRestorePoints`、`-RemoveWindowsOld`、`-RemoveWindowsUpgradeTemp` 仅为兼容旧命令而保留；传入后脚本会在任何清理动作前直接拒绝。
 
@@ -110,6 +125,9 @@ guide.ps1 [-OutFile <path>] [-TopApps N]
 - `Totals.RequiresOptInBytes`：必须显式开关的项。
 - `Totals.DiagnosticsBytes`：排障证据体积，默认保留。
 - `Totals.DeepOptInBytes`：深度或仅手动项，不能据此推断脚本会删除。
+- `StorageLocations[]`：`Name / Kind / Path / Bytes / OnC / Risk / Action`，包含安装目录、聊天数据、安装包和受保护缓存。
+- `StorageOnC[]`：仅位于 C 盘的额外存储项，按体积排序。
+- `Totals.CStorageLocationCount`：检测到位于 C 盘的额外存储项数量。
 
 清理报告包含每项 `Status`、`BytesFreed` 与 `FreeSpaceDelta`。文件未删除时会区分占用、权限、近期保留和其他错误。退出码：`0` 无异常；`2` 有跳过/部分完成/需手工；`1` 参数或致命错误。
 

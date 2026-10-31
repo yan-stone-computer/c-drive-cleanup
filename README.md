@@ -6,10 +6,12 @@
 
 一个会先体检、默认只试运行、主动拒绝误删用户数据的 Windows 清理 skill。
 
+它还会生成“软件存储地图”：安装目录、聊天文件、下载安装包、模型、游戏库、虚拟机数据只要落在 C 盘，就会报告路径、体积、风险和迁移方案。
+
 [![CI](https://github.com/yan-stone-computer/c-drive-cleanup/actions/workflows/test.yml/badge.svg)](https://github.com/yan-stone-computer/c-drive-cleanup/actions/workflows/test.yml)
 [![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white)](#适用环境)
 [![PowerShell 5.1+](https://img.shields.io/badge/PowerShell-5.1%2B-5391FE?logo=powershell&logoColor=white)](#适用环境)
-[![Tests](https://img.shields.io/badge/safety_tests-39%20passed-2ea44f)](#验证)
+[![Tests](https://img.shields.io/badge/safety_tests-42%20passed-2ea44f)](#验证)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/yan-stone-computer/c-drive-cleanup?style=social)](https://github.com/yan-stone-computer/c-drive-cleanup)
 
@@ -111,6 +113,26 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\scan.ps1
 
 `-AllSafe` 已包含浏览器缓存和更新下载缓存；单独出现的这两个开关仍可用于精细控制。
 
+## 软件存储地图
+
+只读体检会检查：
+
+- 注册表中可验证的软件安装位置。
+- 微信、QQ、企业微信、钉钉、飞书、Telegram、Discord、Slack、Teams、Zoom、Outlook 等数据目录。
+- 下载和桌面中的 `.exe`、`.msi`、`.msix`、`.appx`、`.iso`、`.img` 安装包或便携程序。
+- Ollama 模型、Docker/WSL、Steam/Epic 游戏库。
+- `C:\Windows\Installer`、`C:\ProgramData\Package Cache`、`WinSxS` 等受保护安装/系统缓存。
+
+每项包含：
+
+```text
+Name / Kind / Path / Bytes / OnC / Risk / Action
+```
+
+例如聊天文件会建议在应用设置内迁移，游戏库会建议使用 Steam/Epic 官方移动功能，安装包会建议确认后移到其他分区，`Windows\Installer` 和 `Package Cache` 则明确标记为禁止删除。
+
+注册表没有 `InstallLocation` 的软件无法可靠判断安装路径，会显示为未知，不会猜测后自动处理。
+
 示例：
 
 ```powershell
@@ -167,6 +189,8 @@ Totals.SafeAdminBytes         管理员默认可处理
 Totals.DiagnosticsBytes       默认保留的排障证据
 Totals.RequiresOptInBytes     必须显式开关的量
 FreeSpaceDelta                清理前后实际空间变化
+StorageLocations[]            软件安装、数据、安装包和受保护缓存
+StorageOnC[]                  仅在 C 盘的额外存储项
 ```
 
 报告包含本机路径、体积和状态，不包含文件内容。公开贴报告前请先移除用户名和本地路径。
@@ -226,7 +250,7 @@ Windows.old、系统还原点、虚拟内存、用户文件夹和微信/QQ 数�
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\tests\test-lib.ps1
 ```
 
-当前覆盖 **39 项断言**，包括：
+当前覆盖 **42 项断言**，包括：
 
 - 盘符根、UNC、用户资料、系统目录拒绝
 - `TEMP/TMP` 环境变量污染
@@ -235,6 +259,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\tests\test-lib.ps1
 - 近期文件与占用文件保留
 - junction/reparse 跳过
 - 不可逆自动化禁用
+- 软件存储 C 盘识别和迁移方案字段
 - PowerShell 语法与 JSON 基础结构
 
 GitHub Actions 会在 `windows-latest` 上运行同一套测试。

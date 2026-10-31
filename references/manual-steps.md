@@ -209,11 +209,54 @@ Dism.exe /Online /Cleanup-Image /StartComponentCleanup
 - `%USERPROFILE%\Documents\Tencent Files`
 - `%USERPROFILE%\Documents\WXWork`
 - `%USERPROFILE%\Documents\DingTalk`
+- `%LOCALAPPDATA%\Feishu`、`%APPDATA%\Feishu`
+- `%LOCALAPPDATA%\Lark`、`%APPDATA%\Lark`
+- `%APPDATA%\Telegram Desktop`
+- `%APPDATA%\discord`
+- `%APPDATA%\Slack`
+- `%APPDATA%\Microsoft\Teams`
+- `%LOCALAPPDATA%\Packages\MSTeams_8wekyb3d8bbwe`
+- `%APPDATA%\Zoom`、`%USERPROFILE%\Documents\Zoom`
+- `%LOCALAPPDATA%\Microsoft\Outlook`
 - `%LOCALAPPDATA%\Netease\CloudMusic`
 
-原因：可能包含聊天记录、接收文件、账号状态和离线内容。
+原因：可能包含聊天记录、接收文件、录制、邮件数据、账号状态和离线内容。
 
-操作：在应用设置中迁移存储位置，不要直接删目录。
+操作：先在应用设置中迁移存储位置；不支持自定义目录的客户端不要直接移动整个数据目录，应按官方卸载/重装或导出导入流程处理。
+
+### 安装包与便携程序
+
+检测路径：
+
+- `%USERPROFILE%\Downloads`
+- `%USERPROFILE%\Desktop`
+
+检测扩展名：`.exe`、`.msi`、`.msix`、`.msixbundle`、`.appx`、`.appxbundle`、`.iso`、`.img`
+
+原因：这些可能是安装包、驱动包、系统镜像或仍在使用的便携程序。它们属于用户文件，不能因为扩展名相似就自动删除。
+
+操作：确认安装完成后，把安装包移动到其他分区或删除。桌面上的 `.exe` 也可能是便携应用，必须逐个确认。
+
+### 游戏、模型与虚拟机
+
+- Steam：`steamapps\libraryfolders.vdf` 中列出的所有库。
+- Epic：`C:\ProgramData\Epic\EpicGamesLauncher\Data\Manifests` 中记录的安装目录。
+- Ollama：`%USERPROFILE%\.ollama\models`
+- Docker Desktop：`%LOCALAPPDATA%\Docker\wsl`
+- WSL：注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss` 中各发行版记录的 `BasePath`
+
+操作：
+
+- Steam 用“设置 → 存储”移动游戏。
+- Epic 用启动器的游戏管理功能移动。
+- Ollama 先设置 `OLLAMA_MODELS`，再迁移模型目录。
+- Docker/WSL 使用官方导出导入或搬迁功能，禁止直接搬 VHDX。
+
+### 安装缓存
+
+- `C:\Windows\Installer`：Windows Installer 修复/卸载数据库，禁止删除。
+- `C:\ProgramData\Package Cache`：Visual Studio 等安装器的修复缓存，禁止手动删除。
+- `C:\Windows\WinSxS`：组件存储，只能通过管理员 DISM。
 
 ### 开发者缓存
 
@@ -243,3 +286,10 @@ dotnet nuget locals all --clear
 - `ProgramData\Package Cache`
 - 用户桌面/文档/下载中的未知文件
 - 应用聊天记录和游戏存档
+
+## 检测边界
+
+- 注册表没有 `InstallLocation` 的软件无法可靠判断安装路径，应报告“未知”，不能猜测。
+- 应用数据路径随版本变化；只把实际存在的已知路径列入结果。
+- 安装包只扫描下载和桌面，不会遍历整块 C 盘寻找同扩展名文件。
+- 体积可能来自注册表 `EstimatedSize` 或目录实测；路径重叠时不能把总和当成唯一可释放空间。

@@ -68,6 +68,17 @@ jobs:
           $text = Get-Content -Raw -Encoding UTF8 -LiteralPath $out
           if ($text -notmatch '\-AllSafe' -or $text -notmatch 'Windows Temp') { throw 'manual guidance missing' }
 
+      - name: Verify software storage inventory
+        shell: powershell
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'c-drive-scan.json'
+          & powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\scan.ps1 `
+            -SkipSizes -Json -OutFile $out
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $out)) { throw 'scan.ps1 failed' }
+          $scan = Get-Content -Raw -Encoding UTF8 -LiteralPath $out | ConvertFrom-Json
+          if ($null -eq $scan.PSObject.Properties['StorageLocations']) { throw 'StorageLocations missing' }
+          if ($null -eq $scan.PSObject.Properties['StorageOnC']) { throw 'StorageOnC missing' }
+
       - name: Validate skill metadata
         shell: powershell
         run: |

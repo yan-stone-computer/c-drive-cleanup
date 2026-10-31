@@ -22,6 +22,8 @@ function Get-CleanupAudit {
     $restore = Get-RestorePointInfo
     $userFolders = @(Get-UserFolderInfo)
     $appCaches = @(Get-AppCacheInfo)
+    $storageLocations = @(Get-SoftwareStorageInfo -SkipSizes:$SkipSizes)
+    $storageOnC = @($storageLocations | Where-Object { $_.OnC })
     $appsTop = @(Get-TopApps -Top $TopApps)
 
     $manualBytes = [long]0
@@ -59,6 +61,7 @@ function Get-CleanupAudit {
         UserReclaimBytes  = $safeUser
         RequiresOptInBytes = $safeOptIn
         AdminReclaimBytes = $safeAdmin + $deepAuto
+        CStorageLocationCount = $storageOnC.Count
     }
 
     return [pscustomobject]@{
@@ -77,6 +80,8 @@ function Get-CleanupAudit {
         RestorePoints    = $restore
         UserFolders      = @($userFolders)
         AppCaches        = @($appCaches)
+        StorageLocations = @($storageLocations)
+        StorageOnC       = @($storageOnC)
         TopApps          = @($appsTop)
     }
 }
@@ -151,16 +156,28 @@ function Format-AuditText {
     if (-not $deepListed) { $lines.Add("  （没有检测到深度清理项）") }
     $lines.Add("")
 
+    $storageRows = @($Audit.StorageOnC | Sort-Object Bytes -Descending)
+    $lines.Add("【软件额外存储（C 盘）】")
+    if ($storageRows.Count -eq 0) {
+        $lines.Add("  （未检测到注册表安装目录或已知应用数据路径）")
+    } else {
+        foreach ($s in @($storageRows | Select-Object -First 15)) {
+            $lines.Add(("  {0,10}  {1} [{2}]" -f (Format-Size $s.Bytes), $s.Name, $s.Kind))
+            $lines.Add(("              {0}" -f $s.Path))
+            if ($s.Action) { $lines.Add(("              → {0}" -f $s.Action)) }
+        }
+        if ($storageRows.Count -gt 15) {
+            $lines.Add(("  …其余 {0} 项见 JSON 报告或 guide.ps1 清单" -f ($storageRows.Count - 15)))
+        }
+        $lines.Add("  （注册表缺少 InstallLocation 的软件无法可靠判断安装路径；只报告可验证路径）")
+    }
+    $lines.Add("")
+
     $lines.Add("【需要手动处理】")
     $lines.Add(("  用户文件夹合计 {0}：可迁移到其他分区（文档/下载/图片/桌面）" -f (Format-Size ($Audit.Totals.ManualInfoBytes))))
     if ($Audit.Pagefile -and @($Audit.Pagefile.Entries).Count -gt 0) {
         foreach ($p in $Audit.Pagefile.Entries) {
             $lines.Add(("  分页文件 {0}：{1} MB，建议迁到其他分区" -f $p.Name, $p.AllocatedMB))
-        }
-    }
-    if ($Audit.AppCaches.Count -gt 0) {
-        foreach ($a in $Audit.AppCaches) {
-            $lines.Add(("  {0} 缓存 {1}：应用内改存储路径到其他分区" -f $a.Name, (Format-Size $a.Bytes)))
         }
     }
     if ($Audit.StorageSense -and -not $Audit.StorageSense.Enabled) {
